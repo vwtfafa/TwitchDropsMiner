@@ -557,16 +557,10 @@ class DropsCampaign:
 
     @property
     def eligible(self) -> bool:
-        # Linked game campaigns are always eligible.
-        if self.linked:
-            return True
-        # Badge/emote-only campaigns do not require a game account link.
-        if self.only_badges_or_emotes:
-            return True
-        # Mixed campaigns (badges + entitlements): optional partial support.
-        if self.has_badge_or_emote:
-            return self._twitch.settings.enable_badges_emotes
-        return False
+        # Mine every campaign regardless of game-account linking.
+        # Twitch may still refuse to credit/claim unlinked game entitlements;
+        # that is outside what the miner can enforce.
+        return True
 
     @cached_property
     def has_badge_or_emote(self) -> bool:

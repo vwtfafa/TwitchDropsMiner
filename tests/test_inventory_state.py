@@ -258,49 +258,11 @@ def test_negative_minutes_delta_clamps_to_zero() -> None:
     assert drop.current_minutes == 0
 
 
-def test_linked_campaign_is_eligible() -> None:
-    campaign = make_campaign(FakeTwitch(), linked=True)
-    assert campaign.eligible is True
-
-
-def test_unlinked_entitlement_campaign_is_not_eligible() -> None:
-    campaign = make_campaign(FakeTwitch(), linked=False)
-    assert campaign.eligible is False
-
-
-def test_badge_only_campaign_is_eligible_without_link() -> None:
-    campaign = make_campaign(
-        FakeTwitch(), linked=False, distribution_type="BADGE"
-    )
-    assert campaign.only_badges_or_emotes is True
-    assert campaign.eligible is True
-
-
-def test_emote_only_campaign_is_eligible_without_link() -> None:
-    campaign = make_campaign(
-        FakeTwitch(), linked=False, distribution_type="EMOTE"
-    )
-    assert campaign.only_badges_or_emotes is True
-    assert campaign.eligible is True
-
-
-def test_mixed_badge_campaign_needs_partial_support_setting() -> None:
-    data = campaign_data(linked=False, distribution_type="BADGE")
-    data["timeBasedDrops"][0]["benefitEdges"].append(
-        {
-            "benefit": {
-                "id": "benefit-entitlement",
-                "name": "Game Item",
-                "distributionType": "DIRECT_ENTITLEMENT",
-                "imageAssetURL": "https://example.com/item.png",
-            }
-        }
-    )
-    twitch = FakeTwitch()
-    campaign = DropsCampaign(twitch, data, {})
-    assert campaign.has_badge_or_emote is True
-    assert campaign.only_badges_or_emotes is False
-    assert campaign.eligible is False
-
-    twitch.settings.enable_badges_emotes = True
-    assert campaign.eligible is True
+def test_campaigns_are_eligible_without_account_link() -> None:
+    linked = make_campaign(FakeTwitch(), linked=True)
+    unlinked = make_campaign(FakeTwitch(), linked=False)
+    badge = make_campaign(FakeTwitch(), linked=False, distribution_type="BADGE")
+    assert linked.eligible is True
+    assert unlinked.eligible is True
+    assert badge.eligible is True
+    assert badge.only_badges_or_emotes is True

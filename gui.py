@@ -1479,7 +1479,7 @@ class InventoryOverview:
         if column == "ends":
             return campaign.ends_at
         if column == "linked":
-            return campaign.eligible
+            return campaign.linked
         return ''
 
     def _is_visible(self, campaign: DropsCampaign) -> bool:
@@ -1497,7 +1497,7 @@ class InventoryOverview:
         status = campaign.status
         return (
             campaign.required_minutes > 0  # don't show sub-only campaigns
-            and (not_linked or campaign.eligible)
+            and (not_linked or campaign.linked)
             and (
                 status is CampaignStatus.ACTIVE
                 or (status is CampaignStatus.UPCOMING and upcoming)
@@ -1521,7 +1521,7 @@ class InventoryOverview:
         ends_text = str(campaign.ends_at.astimezone().replace(microsecond=0, tzinfo=None))
         link_text = (
             _("gui", "inventory", "status", "linked")
-            if campaign.eligible
+            if campaign.linked
             else _("gui", "inventory", "status", "not_linked")
         )
         return (
@@ -1678,8 +1678,8 @@ class InventoryOverview:
             reverse=campaign.upcoming,
             takefocus=False,
         ).grid(column=1, row=2, sticky="w", padx=4)
-        # Linking status
-        if campaign.eligible:
+        # Linking status (display only — mining ignores link requirements)
+        if campaign.linked:
             link_kwargs = {
                 "style": '',
                 "text": _("gui", "inventory", "status", "linked"),
