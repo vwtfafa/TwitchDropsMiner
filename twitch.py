@@ -45,7 +45,13 @@ from utils import (
     redact_sensitive,
     find_browser_executable,
     backup_cookies,
-    check_dev_build_update,
+)
+from updater import (
+    UpdateInfo,
+    apply_windows_update,
+    can_auto_apply,
+    download_update,
+    fetch_update_info,
 )
 from constants import (
     CALL,
@@ -909,11 +915,66 @@ class Twitch:
         )
 
     @task_wrapper
-    async def _check_update(self) -> None:
+    async def _check_update(self, *, interactive: bool = False) -> None:
+        """Check GitHub for a newer Windows build; optionally download and apply it."""
         session = await self.get_session()
-        published = await check_dev_build_update(session)
-        if published:
-            self.print(_("status", "update_available").format(published=published))
+        info = await fetch_update_info(session)
+        if info is None:
+            if interactive:
+                self.print(_("status", "update_check_failed"))
+            return
+        if not info.is_newer:
+            if interactive:
+                self.print(_("status", "update_up_to_date"))
+            return
+
+        self.print(
+            _("status", "update_available").format(
+                published=info.published_at or "?",
+                sha=info.remote_sha[:7] if info.remote_sha else "?",
+            )
+        )
+        if not can_auto_apply():
+            if interactive:
+                self.print(_("status", "update_manual"))
+            return
+
+        # Startup: only auto-install when the setting is on. Manual button always asks.
+        if not interactive and not self.settings.auto_update:
+            return
+
+        should_install = True
+        if interactive or self.settings.auto_update:
+            should_install = self.gui.ask_yes_no(
+                _("gui", "help", "update", "title"),
+                _("gui", "help", "update", "confirm").format(
+                    published=info.published_at or "?",
+                    sha=info.remote_sha[:7] if info.remote_sha else "?",
+                ),
+            )
+        if not should_install:
+            return
+
+        await self._install_update(info)
+
+    async def _install_update(self, info: UpdateInfo) -> None:
+        from constants import WORKING_DIR
+
+        self.print(_("status", "update_downloading"))
+        session = await self.get_session()
+        zip_path = WORKING_DIR / "_update_download.zip"
+        try:
+            await download_update(session, info, zip_path)
+            self.print(_("status", "update_applying"))
+            apply_windows_update(zip_path)
+            # Exit so the batch script can replace the locked EXE.
+            self.gui.close()
+        except Exception:
+            logger.exception("Failed to apply update")
+            self.print(_("status", "update_failed"))
+
+    def request_update_check(self) -> None:
+        asyncio.create_task(self._check_update(interactive=True))
 
     async def _run(self):
         """
@@ -930,7 +991,8 @@ class Twitch:
         auth_state = await self.get_auth()
         if self.state is State.EXIT:
             return
-        asyncio.create_task(self._check_update())
+        if self.settings.auto_update:
+            asyncio.create_task(self._check_update(interactive=False))
         await self.websocket.start()
         if self.state is State.EXIT:
             return
@@ -1034,6 +1096,26 @@ class Twitch:
                             self.wanted_games.append(game)
                     if self.wanted_games:
                         break
+                # After the priority list is exhausted, optionally keep mining
+                # badge/emote-only campaigns even when Priority-only is enabled.
+                if self.settings.fallback_badges_emotes:
+                    priority_still_active = any(
+                        campaign.game.name in priority
+                        and campaign.game.name not in exclude
+                        and campaign.can_earn_within(next_hour)
+                        and not campaign.finished
+                        for campaign in self.inventory
+                    )
+                    if not priority_still_active:
+                        for campaign in sorted_campaigns:
+                            game = campaign.game
+                            if (
+                                campaign.only_badges_or_emotes
+                                and game not in self.wanted_games
+                                and game.name not in exclude
+                                and campaign.can_earn_within(next_hour)
+                            ):
+                                self.wanted_games.append(game)
                 full_cleanup = True
                 self.restart_watching()
                 self._advance_state(State.CHANNELS_CLEANUP)

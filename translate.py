@@ -24,6 +24,12 @@ class StatusMessages(TypedDict):
     progress_stalled: str
     unlinked_warning: str
     update_available: str
+    update_up_to_date: str
+    update_check_failed: str
+    update_manual: str
+    update_downloading: str
+    update_applying: str
+    update_failed: str
 
 
 class BrowserMessages(TypedDict):
@@ -211,6 +217,8 @@ class GUISettingsGeneral(TypedDict):
     tray_notifications: str
     dark_mode: str
     priority_mode: str
+    auto_update: str
+    fallback_badges_emotes: str
     proxy: str
     browser_path: str
     browser_path_hint: str
@@ -266,6 +274,13 @@ class GUIHelpInvalidate(TypedDict):
     text: str
 
 
+class GUIHelpUpdate(TypedDict):
+    button: str
+    text: str
+    title: str
+    confirm: str
+
+
 class GUIHelp(TypedDict):
     links: GUIHelpLinks
     how_it_works: str
@@ -273,6 +288,7 @@ class GUIHelp(TypedDict):
     getting_started: str
     getting_started_text: str
     invalidate: GUIHelpInvalidate
+    update: GUIHelpUpdate
 
 
 class GUIMessages(TypedDict):
@@ -328,8 +344,17 @@ default_translation: Translation = {
         ),
         "update_available": (
             "A newer development build is available "
-            "(published {published}). Check the GitHub releases page."
+            "(published {published}, commit {sha})."
         ),
+        "update_up_to_date": "You are already on the latest development build.",
+        "update_check_failed": "Could not check for updates. Try again later.",
+        "update_manual": (
+            "Automatic install is only available for the Windows EXE. "
+            "Download the latest build from GitHub releases."
+        ),
+        "update_downloading": "Downloading update…",
+        "update_applying": "Update downloaded. Restarting to apply…",
+        "update_failed": "Update failed. Please download the release manually.",
     },
     "login": {
         "unexpected_content": (
@@ -511,6 +536,10 @@ default_translation: Translation = {
                 "tray_notifications": "Tray notifications: ",
                 "dark_mode": "Dark mode: ",
                 "priority_mode": "Priority mode: ",
+                "auto_update": "Check for updates on startup: ",
+                "fallback_badges_emotes": (
+                    "After priority list is done, mine badges/emotes: "
+                ),
                 "proxy": "Proxy (requires restart):",
                 "browser_path": "Browser path (empty = auto):",
                 "browser_path_hint": (
@@ -604,6 +633,16 @@ default_translation: Translation = {
             "invalidate": {
                 "button": "Invalidate",
                 "text": "Invalidate the authentication token (log out):",
+            },
+            "update": {
+                "button": "Check for updates",
+                "text": "Download and install the latest Windows build:",
+                "title": "Update available",
+                "confirm": (
+                    "A newer build is available "
+                    "(published {published}, commit {sha}).\n\n"
+                    "Download and install now? The app will restart."
+                ),
             },
         },
     },

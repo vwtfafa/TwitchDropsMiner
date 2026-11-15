@@ -20,18 +20,15 @@ from contextlib import suppress
 from functools import cached_property
 from datetime import datetime, timezone
 from collections import abc, OrderedDict
-from typing import Any, Literal, Callable, Generic, Mapping, TypeVar, ParamSpec, cast, TYPE_CHECKING
+from typing import Any, Literal, Callable, Generic, Mapping, TypeVar, ParamSpec, cast
 
 from yarl import URL
 from PIL.ImageTk import PhotoImage
 from PIL import Image as Image_module
 
 from exceptions import ExitRequest, ReloadRequest
-from constants import COOKIES_PATH, IS_PACKAGED, WORKING_DIR, JsonType, PriorityMode
+from constants import COOKIES_PATH, IS_PACKAGED, JsonType, PriorityMode
 from constants import _resource_path as resource_path  # noqa
-
-if TYPE_CHECKING:
-    import aiohttp
 
 
 _T = TypeVar("_T")  # type
@@ -355,34 +352,6 @@ def backup_cookies() -> Path | None:
     backup_path = COOKIES_PATH.with_name(f"{COOKIES_PATH.name}.bak")
     shutil.copy2(COOKIES_PATH, backup_path)
     return backup_path
-
-
-async def check_dev_build_update(session: aiohttp.ClientSession) -> str | None:
-    """Return ISO published_at if GitHub dev-build is newer than local; else None."""
-    url = "https://api.github.com/repos/vwtfafa/TwitchDropsMiner/releases/tags/dev-build"
-    seen_path = WORKING_DIR / ".update_seen"
-    try:
-        async with session.get(url) as response:
-            if response.status != 200:
-                return None
-            data = await response.json()
-        published_at = data.get("published_at")
-        if not isinstance(published_at, str) or not published_at:
-            return None
-        last_seen = ""
-        if seen_path.exists():
-            last_seen = seen_path.read_text(encoding="utf8").strip()
-        if not last_seen:
-            # First run: remember current release without nagging.
-            seen_path.write_text(published_at, encoding="utf8")
-            return None
-        if published_at <= last_seen:
-            return None
-        seen_path.write_text(published_at, encoding="utf8")
-        return published_at
-    except Exception:
-        logger.debug("Dev-build update check failed", exc_info=True)
-        return None
 
 
 def find_browser_executable(preferred: str | Path | None = None) -> Path:

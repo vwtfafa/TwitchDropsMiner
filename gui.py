@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from tkinter.font import Font, nametofont
 from functools import partial, cached_property
 from datetime import datetime, timedelta, timezone
-from tkinter import Tk, ttk, StringVar, DoubleVar, IntVar
+from tkinter import Tk, ttk, StringVar, DoubleVar, IntVar, messagebox
 from typing import Any, Union, Tuple, TypedDict, NoReturn, Generic, TYPE_CHECKING
 
 import pystray
@@ -1972,6 +1972,8 @@ class _SettingsVars(TypedDict):
     priority_mode: StringVar
     tray_notifications: IntVar
     browser_path: StringVar
+    auto_update: IntVar
+    fallback_badges_emotes: IntVar
     available_drops_check: IntVar
 
 
@@ -2007,6 +2009,10 @@ class SettingsPanel:
             "priority_mode": StringVar(master, self.PRIORITY_MODES[priority_mode]),
             "tray_notifications": IntVar(master, self._settings.tray_notifications),
             "browser_path": StringVar(master, self._settings.browser_path),
+            "auto_update": IntVar(master, int(self._settings.auto_update)),
+            "fallback_badges_emotes": IntVar(
+                master, int(self._settings.fallback_badges_emotes)
+            ),
             "available_drops_check": IntVar(
                 master, int(self._settings.available_drops_check)
             ),
@@ -2086,6 +2092,27 @@ class SettingsPanel:
             command=self.priority_mode,
             textvariable=self._vars["priority_mode"],
             values=list(self.PRIORITY_MODES.values()),
+        ).grid(column=1, row=irow, sticky="w")
+        ttk.Label(
+            checkboxes_frame, text=_("gui", "settings", "general", "auto_update")
+        ).grid(column=0, row=(irow := irow + 1), sticky="e")
+        ttk.Checkbutton(
+            checkboxes_frame,
+            variable=self._vars["auto_update"],
+            command=lambda: setattr(
+                self._settings,
+                "auto_update",
+                bool(self._vars["auto_update"].get()),
+            ),
+        ).grid(column=1, row=irow, sticky="w")
+        ttk.Label(
+            checkboxes_frame,
+            text=_("gui", "settings", "general", "fallback_badges_emotes"),
+        ).grid(column=0, row=(irow := irow + 1), sticky="e")
+        ttk.Checkbutton(
+            checkboxes_frame,
+            variable=self._vars["fallback_badges_emotes"],
+            command=self._toggle_fallback_badges,
         ).grid(column=1, row=irow, sticky="w")
 
         # proxy frame
@@ -2519,6 +2546,12 @@ class SettingsPanel:
         self.update_priority_choices()
         self._refresh_inventory()
 
+    def _toggle_fallback_badges(self) -> None:
+        self._settings.fallback_badges_emotes = bool(
+            self._vars["fallback_badges_emotes"].get()
+        )
+        self._manager._twitch.request_state(State.RULES_UPDATE)
+
     def priority_mode(self, event: tk.Event[ttk.Combobox]) -> None:
         mode_name: str = self._vars["priority_mode"].get()
         for value, name in self.PRIORITY_MODES.items():
@@ -2662,20 +2695,28 @@ class HelpTab:
             getstarted, text=_("gui", "help", "getting_started_text"), wraplength=self.WIDTH
         ).grid(sticky="nsew")
 
-        # Invalidate button
+        # Update + invalidate controls
         invalidate_frame = ttk.Frame(bottom_frame)
         bottom_frame.columnconfigure(0, weight=1)  # center within the column
         invalidate_frame.grid(column=0, row=0, sticky="nse")
         ttk.Label(
+            invalidate_frame, text=_("gui", "help", "update", "text")
+        ).grid(column=0, row=0, sticky="e")
+        ttk.Button(
+            invalidate_frame,
+            text=_("gui", "help", "update", "button"),
+            command=self._twitch.request_update_check,
+        ).grid(column=1, row=0, sticky="w", padx=(4, 0))
+        ttk.Label(
             invalidate_frame, text=_("gui", "help", "invalidate", "text")
-        ).grid(column=0, row=0)
+        ).grid(column=0, row=1, sticky="e", pady=(4, 0))
         self._invalidate_button: ttk.Button = ttk.Button(
             invalidate_frame,
             text=_("gui", "help", "invalidate", "button"),
             command=self.invalidate_token,
             state="disabled",
         )
-        self._invalidate_button.grid(column=1, row=0)
+        self._invalidate_button.grid(column=1, row=1, sticky="w", padx=(4, 0), pady=(4, 0))
 
     def invalidate_token(self) -> None:
         # sync to async bridge
@@ -3280,6 +3321,10 @@ class GUIManager:
         # print to our custom output
         self.output.print(message)
 
+    def ask_yes_no(self, title: str, message: str) -> bool:
+        self.grab_attention(sound=False)
+        return bool(messagebox.askyesno(title, message, parent=self._root))
+
     def _set_title_bar_color(self, color: int) -> None:
         """
         Set the Windows title bar color to match the theme.
@@ -3647,6 +3692,8 @@ if __name__ == "__main__":
                 exclude={"Lit Game"},
                 tray_notifications=True,
                 browser_path="",
+                auto_update=True,
+                fallback_badges_emotes=True,
                 available_drops_check=False,
                 logging_level=LOGGING_LEVELS[0],
                 priority_mode=PriorityMode.PRIORITY_ONLY,

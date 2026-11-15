@@ -36,9 +36,11 @@ class SettingsFile(TypedDict):
     priority: list[str]
     browser_path: str
     autostart_tray: bool
+    auto_update: bool
     connection_quality: int
     tray_notifications: bool
     available_drops_check: bool
+    fallback_badges_emotes: bool
     priority_mode: PriorityMode
 
 
@@ -49,10 +51,12 @@ default_settings: SettingsFile = {
     "browser_path": "",
     "dark_mode": detect_system_dark_mode(),
     "autostart_tray": False,
+    "auto_update": True,
     "connection_quality": 1,
     "language": DEFAULT_LANG,
     "tray_notifications": True,
     "available_drops_check": False,
+    "fallback_badges_emotes": True,
     "priority_mode": PriorityMode.ENDING_SOONEST,
 }
 
@@ -74,9 +78,11 @@ class Settings:
     priority: list[str]
     browser_path: str
     autostart_tray: bool
+    auto_update: bool
     connection_quality: int
     tray_notifications: bool
     available_drops_check: bool
+    fallback_badges_emotes: bool
     priority_mode: PriorityMode
 
     PASSTHROUGH = ("_settings", "_args", "_altered")
