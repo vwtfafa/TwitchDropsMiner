@@ -40,6 +40,9 @@ default_database: Hashes = {}
 
 class ImageCache:
     LIFETIME = timedelta(days=7)
+    # Only refresh expiry when it is this close to elapsing — avoids dirtying
+    # the mapping DB on every cache hit.
+    EXPIRY_REFRESH_WITHIN = timedelta(days=1)
     # Network fetches are the expensive part. Cache hits don't use this limit.
     # 8 keeps the CDN load reasonable while still being much faster than the old
     # fully-serialized behaviour.
@@ -125,29 +128,21 @@ class ImageCache:
         bits = ''.join('1' if px >= avg_pixel else '0' for px in pixel_data)
         return ImageHash(f"{int(bits, 2):x}.png")
 
-    def _load_cached_locked(self, url: URLType) -> tuple[ImageHash, Image] | None:
-        """
-        Resolve a cached URL to an image.
+    def _touch_expiry_locked(self, hash_dict: ExpiringHash) -> None:
+        """Refresh expiry only when it is about to lapse (caller holds the lock)."""
+        now = datetime.now(timezone.utc)
+        if hash_dict["expires"] - now <= self.EXPIRY_REFRESH_WITHIN:
+            hash_dict["expires"] = self._new_expires()
+            self._altered = True
 
-        The caller must hold `self._lock`. This may touch the disk, so it only
-        happens on a cache hit; network fetches stay outside the lock.
-        """
-        hash_dict = self._hashes.get(url)
-        if hash_dict is None:
-            return None
-        img_hash = hash_dict["hash"]
-        hash_dict["expires"] = self._new_expires()
-        self._altered = True
-        image = self._images.get(img_hash)
-        if image is not None:
-            return img_hash, image
+    @staticmethod
+    def _open_disk(img_hash: ImageHash) -> Image | None:
         try:
             loaded = Image_module.open(CACHE_PATH / img_hash)
             loaded.load()  # force full decode so broken data is caught here
+            return loaded
         except (FileNotFoundError, Image_module.UnidentifiedImageError, OSError):
             return None
-        self._images[img_hash] = loaded
-        return img_hash, loaded
 
     async def _fetch_image(self, url: URLType) -> Image:
         """
@@ -169,8 +164,7 @@ class ImageCache:
     async def _fetch_and_store(self, url: URLType) -> tuple[ImageHash, Image]:
         # Re-check the cache: another task may have filled it between the caller's
         # lookup and this task starting.
-        async with self._lock:
-            cached = self._load_cached_locked(url)
+        cached = await self._lookup_cached(url)
         if cached is not None:
             return cached
         image = await self._fetch_image(url)
@@ -186,6 +180,31 @@ class ImageCache:
             }
             self._altered = True
         return img_hash, image
+
+    async def _lookup_cached(self, url: URLType) -> tuple[ImageHash, Image] | None:
+        """
+        Resolve a cached URL without holding the lock during disk I/O.
+        """
+        async with self._lock:
+            hash_dict = self._hashes.get(url)
+            if hash_dict is None:
+                return None
+            img_hash = hash_dict["hash"]
+            self._touch_expiry_locked(hash_dict)
+            memory = self._images.get(img_hash)
+        if memory is not None:
+            return img_hash, memory
+        # Disk decode outside the lock so concurrent gets can proceed.
+        loaded = self._open_disk(img_hash)
+        if loaded is None:
+            return None
+        async with self._lock:
+            # Another task may have loaded it while we were on disk.
+            existing = self._images.get(img_hash)
+            if existing is not None:
+                return img_hash, existing
+            self._images[img_hash] = loaded
+            return img_hash, loaded
 
     def _fetch_done(
         self, url: URLType, task: asyncio.Task[tuple[ImageHash, Image]]
@@ -204,9 +223,7 @@ class ImageCache:
                 master=self._root,
                 image=Image_module.new("RGB", size, (255, 255, 255)),
             )
-        # Fast path: cached mapping + memory/disk image, under the metadata lock.
-        async with self._lock:
-            cached = self._load_cached_locked(url)
+        cached = await self._lookup_cached(url)
         if cached is not None:
             img_hash, image = cached
         else:

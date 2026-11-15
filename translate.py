@@ -262,9 +262,17 @@ class GUIPriorityModes(TypedDict):
     low_availability: str
 
 
+class GUISettingsSections(TypedDict):
+    appearance: str
+    startup: str
+    mining: str
+    connection: str
+
+
 class GUISettings(TypedDict):
     general: GUISettingsGeneral
     advanced: GUISettingsAdvanced
+    sections: GUISettingsSections
     priority_modes: GUIPriorityModes
     game_name: str
     priority: str
@@ -589,6 +597,12 @@ default_translation: Translation = {
                 "priority_only": "Priority list only",
                 "ending_soonest": "Ending soonest",
                 "low_availability": "Low availability first",
+            },
+            "sections": {
+                "appearance": "Appearance",
+                "startup": "Startup",
+                "mining": "Mining",
+                "connection": "Connection",
             },
             "game_name": "Game name",
             "priority": "Priority",

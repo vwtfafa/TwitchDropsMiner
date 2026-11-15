@@ -578,6 +578,10 @@ class Twitch:
         self._mining_paused: bool = False
         self._skipped_channel_ids: set[int] = set()
         self._deferred_game_names: set[str] = set()
+        # Cached CampaignDetails payloads keyed by campaign id + a summary signature.
+        # Unchanged campaigns skip the heavy per-campaign GQL round-trips on reload.
+        self._campaign_detail_cache: dict[str, JsonType] = {}
+        self._campaign_detail_sigs: dict[str, str] = {}
         # NOTE: GQL is pretty volatile and breaks everything if one runs into their rate limit.
         # Do not modify the default, safe values.
         self._qgl_limiter = RateLimiter(capacity=5, window=1)
@@ -674,6 +678,8 @@ class Twitch:
         self._mining_paused = False
         self._skipped_channel_ids.clear()
         self._deferred_game_names.clear()
+        self._campaign_detail_cache.clear()
+        self._campaign_detail_sigs.clear()
         self._next_reload_at = None
         # wait at least half a second + whatever it takes to complete the closing
         # this allows aiohttp to safely close the session
@@ -1288,11 +1294,15 @@ class Twitch:
                         )
                     self.websocket.remove_topics(to_remove_topics)
                     del to_remove_channels, to_remove_topics
-                # set our new channel list
+                # set our new channel list (bulk UI insert avoids per-row redraws)
                 channels.clear()
-                for channel in ordered_channels:
-                    channels[channel.id] = channel
-                    channel.display(add=True)
+                self.gui.channels.begin_bulk()
+                try:
+                    for channel in ordered_channels:
+                        channels[channel.id] = channel
+                        channel.display(add=True)
+                finally:
+                    self.gui.channels.end_bulk()
                 # subscribe to these channel's state updates
                 to_add_topics: list[WebsocketTopic] = []
                 for channel_id in channels:
@@ -1994,6 +2004,20 @@ class Twitch:
                 merged[key] = secondary_data[key]
         return merged
 
+    @staticmethod
+    def _campaign_detail_sig(summary: JsonType) -> str:
+        """Fingerprint of summary fields that invalidate cached CampaignDetails."""
+        game = summary.get("game") or {}
+        return "|".join(
+            (
+                str(summary.get("status") or ""),
+                str(summary.get("startAt") or ""),
+                str(summary.get("endAt") or ""),
+                str(summary.get("name") or ""),
+                str(game.get("id") if isinstance(game, dict) else ""),
+            )
+        )
+
     async def fetch_campaigns(
         self, campaigns_chunk: list[tuple[str, JsonType]]
     ) -> dict[str, JsonType]:
@@ -2049,21 +2073,45 @@ class Twitch:
             for c in available_list
             if c["status"] in applicable_statuses  # that are currently not expired
         }
-        # fetch detailed data for each campaign, in chunks
+        # Reuse cached CampaignDetails when the summary fingerprint is unchanged.
         status_update(_("gui", "status", "fetching_campaigns"))
-        fetch_campaigns_tasks: list[asyncio.Task[Any]] = [
-            asyncio.create_task(self.fetch_campaigns(campaigns_chunk))
-            for campaigns_chunk in chunk(available_campaigns.items(), 20)
-        ]
-        try:
-            for coro in asyncio.as_completed(fetch_campaigns_tasks):
-                chunk_campaigns_data = await coro
-                # merge the inventory and campaigns datas together
-                inventory_data = self._merge_data(inventory_data, chunk_campaigns_data)
-        except BaseException:
-            # asyncio.as_completed doesn't cancel tasks on errors or cancellation
-            await self._cancel_tasks(fetch_campaigns_tasks)
-            raise
+        to_fetch: list[tuple[str, JsonType]] = []
+        reused = 0
+        for cid, summary in available_campaigns.items():
+            sig = self._campaign_detail_sig(summary)
+            cached = self._campaign_detail_cache.get(cid)
+            if cached is not None and self._campaign_detail_sigs.get(cid) == sig:
+                inventory_data = self._merge_data(inventory_data, {cid: cached})
+                reused += 1
+            else:
+                to_fetch.append((cid, summary))
+        if reused:
+            logger.log(CALL, f"Campaign details cache hit: {reused}/{len(available_campaigns)}")
+        if to_fetch:
+            fetch_campaigns_tasks: list[asyncio.Task[Any]] = [
+                asyncio.create_task(self.fetch_campaigns(campaigns_chunk))
+                for campaigns_chunk in chunk(to_fetch, 20)
+            ]
+            try:
+                for coro in asyncio.as_completed(fetch_campaigns_tasks):
+                    chunk_campaigns_data = await coro
+                    # merge the inventory and campaigns datas together
+                    inventory_data = self._merge_data(inventory_data, chunk_campaigns_data)
+                    for cid, details in chunk_campaigns_data.items():
+                        summary = available_campaigns.get(cid)
+                        if summary is None:
+                            continue
+                        self._campaign_detail_cache[cid] = details
+                        self._campaign_detail_sigs[cid] = self._campaign_detail_sig(summary)
+            except BaseException:
+                # asyncio.as_completed doesn't cancel tasks on errors or cancellation
+                await self._cancel_tasks(fetch_campaigns_tasks)
+                raise
+        # Drop cache entries for campaigns that are no longer available
+        stale_ids = [cid for cid in self._campaign_detail_cache if cid not in available_campaigns]
+        for cid in stale_ids:
+            self._campaign_detail_cache.pop(cid, None)
+            self._campaign_detail_sigs.pop(cid, None)
         # filter out invalid campaigns
         for campaign_id in list(inventory_data.keys()):
             if inventory_data[campaign_id]["game"] is None:

@@ -146,6 +146,12 @@
                 "dark_mode": "Dunkler Modus: ",
                 "proxy": "Proxy (Erfordert Neustart):"
             },
+            "sections": {
+                "appearance": "Darstellung",
+                "startup": "Start",
+                "mining": "Mining",
+                "connection": "Verbindung"
+            },
             "game_name": "Spiel",
             "priority": "Priorität",
             "exclude": "Ausschließen",

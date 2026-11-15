@@ -1,6 +1,14 @@
 from __future__ import annotations
 
 from updater import UpdateInfo, format_release_notes, local_commit_sha
+from twitch import Twitch
+
+
+def test_campaign_detail_sig_changes_with_status() -> None:
+    a = {"status": "ACTIVE", "startAt": "1", "endAt": "2", "name": "X", "game": {"id": "9"}}
+    b = {**a, "status": "UPCOMING"}
+    assert Twitch._campaign_detail_sig(a) != Twitch._campaign_detail_sig(b)
+    assert Twitch._campaign_detail_sig(a) == Twitch._campaign_detail_sig(dict(a))
 
 
 def test_format_release_notes_strips_commit_and_truncates() -> None:

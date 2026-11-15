@@ -483,7 +483,8 @@ class _WSEntry(TypedDict):
 class WebsocketStatus:
     def __init__(self, manager: GUIManager, master: ttk.Widget):
         frame = ttk.LabelFrame(master, text=_("gui", "websocket", "name"), padding=(4, 0, 4, 4))
-        frame.grid(column=0, row=1, sticky="nsew", padx=2)
+        # Secondary diagnostics — below progress, left of channels.
+        frame.grid(column=0, row=2, sticky="nsew", padx=2)
         self._status_var = StringVar(frame)
         self._topics_var = StringVar(frame)
         ttk.Label(
@@ -556,7 +557,8 @@ class LoginForm:
         self._manager = manager
         self._var = StringVar(master)
         frame = ttk.LabelFrame(master, text=_("gui", "login", "name"), padding=(4, 0, 4, 4))
-        frame.grid(column=1, row=1, sticky="nsew", padx=2)
+        # Secondary — below progress, beside websockets.
+        frame.grid(column=1, row=2, sticky="nsew", padx=2)
         frame.columnconfigure(0, weight=2)
         frame.columnconfigure(1, weight=1)
         frame.rowconfigure(4, weight=1)
@@ -684,7 +686,8 @@ class CampaignProgress:
         self._frame = frame = ttk.LabelFrame(
             master, text=_("gui", "progress", "name"), padding=(4, 0, 4, 4)
         )
-        frame.grid(column=0, row=2, columnspan=2, sticky="nsew", padx=2)
+        # Progress sits directly under status — the primary "what am I mining" signal.
+        frame.grid(column=0, row=1, columnspan=2, sticky="nsew", padx=2)
         frame.columnconfigure(0, weight=2)
         frame.columnconfigure(1, weight=1)
         game_campaign = ttk.Frame(frame)
@@ -829,9 +832,9 @@ class CampaignProgress:
 class ConsoleOutput:
     def __init__(self, manager: GUIManager, master: ttk.Widget):
         frame = ttk.LabelFrame(master, text=_("gui", "output"), padding=(4, 0, 4, 4))
-        frame.grid(column=0, row=3, columnspan=3, sticky="nsew", padx=2)
+        frame.grid(column=0, row=4, columnspan=3, sticky="nsew", padx=2)
         # tell master frame that the containing row can expand
-        master.rowconfigure(3, weight=1)
+        master.rowconfigure(4, weight=1)
         frame.rowconfigure(0, weight=1)  # let the frame expand
         frame.columnconfigure(0, weight=1)
         xscroll = ttk.Scrollbar(frame, orient="horizontal")
@@ -881,9 +884,11 @@ class ChannelList:
     def __init__(self, manager: GUIManager, master: ttk.Widget):
         self._manager = manager
         frame = ttk.LabelFrame(master, text=_("gui", "channels", "name"), padding=(4, 0, 4, 4))
-        frame.grid(column=2, row=1, rowspan=2, sticky="nsew", padx=2)
+        # Channels sit beside progress (primary mining view) and span login/ws below.
+        frame.grid(column=2, row=1, rowspan=3, sticky="nsew", padx=2)
         # tell master frame that the containing column can expand
         master.columnconfigure(2, weight=1)
+        master.rowconfigure(1, weight=1)
         frame.rowconfigure(1, weight=1)
         frame.columnconfigure(0, weight=1)
         buttons_frame = ttk.Frame(frame)
@@ -958,6 +963,25 @@ class ChannelList:
             table.heading(cid, text=name, anchor=anchor)
             table.column(cid, minwidth=width, width=width, stretch=False)
         self._channel_map: dict[str, Channel] = {}
+        # When True, width adjustments are deferred until end_bulk() — avoids
+        # O(n) ThemeChanged redraws while filling ~200 channels.
+        self._bulk: bool = False
+        self._bulk_widths: dict[str, int] = {}
+
+    def begin_bulk(self) -> None:
+        self._bulk = True
+        self._bulk_widths.clear()
+
+    def end_bulk(self) -> None:
+        self._bulk = False
+        for column, width in self._bulk_widths.items():
+            if column in self._const_width:
+                continue
+            curr_width = self._table.column(column, "width")
+            if width > curr_width:
+                self._table.column(column, width=width)
+        self._bulk_widths.clear()
+        self._redraw()
 
     def _disable_column_resize(self, event):
         if self._table.identify_region(event.x, event.y) == "separator":
@@ -989,6 +1013,11 @@ class ChannelList:
         if column in self._const_width:
             return
         value_width = self._measure(value)
+        if self._bulk:
+            prev = self._bulk_widths.get(column, 0)
+            if value_width > prev:
+                self._bulk_widths[column] = value_width
+            return
         curr_width = self._table.column(column, "width")
         if value_width > curr_width:
             self._table.column(column, width=value_width)
@@ -2040,51 +2069,55 @@ class SettingsPanel:
         center_frame = ttk.Frame(master)
         center_frame.grid(column=0, row=0)
 
-        # General section
-        general_frame = ttk.LabelFrame(
-            center_frame, padding=(4, 0, 4, 4), text=_("gui", "settings", "general", "name")
-        )
-        general_frame.grid(column=0, row=0, sticky="nsew")
-        # use another frame to center the options within the section
-        # NOTE: this can be adjusted or removed later on if more options were to be added
-        general_frame.rowconfigure(0, weight=1)
-        general_frame.columnconfigure(0, weight=1)
-        general_center = ttk.Frame(general_frame)
-        general_center.grid(column=0, row=0)
+        # Left column: grouped options (Appearance / Startup / Mining / Connection / Advanced)
+        left_column = ttk.Frame(center_frame)
+        left_column.grid(column=0, row=0, rowspan=2, sticky="nsew")
 
-        # language frame
-        language_frame = ttk.Frame(general_center)
-        language_frame.grid(column=0, row=0)
-        ttk.Label(language_frame, text="Language 🌐 (requires restart): ").grid(column=0, row=0)
+        appearance = ttk.LabelFrame(
+            left_column, padding=(4, 0, 4, 4), text=_("gui", "settings", "sections", "appearance")
+        )
+        appearance.grid(column=0, row=0, sticky="ew", pady=(0, 4))
+        ttk.Label(appearance, text="Language 🌐 (requires restart): ").grid(
+            column=0, row=0, sticky="e"
+        )
         SelectCombobox(
-            language_frame,
+            appearance,
             values=list(_.languages),
             textvariable=self._vars["language"],
             command=lambda e: setattr(self._settings, "language", self._vars["language"].get()),
-        ).grid(column=1, row=0)
-
-        # checkboxes frame
-        checkboxes_frame = ttk.Frame(general_center)
-        checkboxes_frame.grid(column=0, row=1)
-        ttk.Label(
-            checkboxes_frame, text=_("gui", "settings", "general", "autostart")
-        ).grid(column=0, row=(irow := 0), sticky="e")
+        ).grid(column=1, row=0, sticky="w")
+        ttk.Label(appearance, text=_("gui", "settings", "general", "dark_mode")).grid(
+            column=0, row=1, sticky="e"
+        )
         ttk.Checkbutton(
-            checkboxes_frame, variable=self._vars["autostart"], command=self.update_autostart
+            appearance,
+            variable=self._vars["dark_mode"],
+            command=self.update_dark_mode,
+        ).grid(column=1, row=1, sticky="w")
+
+        startup = ttk.LabelFrame(
+            left_column, padding=(4, 0, 4, 4), text=_("gui", "settings", "sections", "startup")
+        )
+        startup.grid(column=0, row=1, sticky="ew", pady=(0, 4))
+        ttk.Label(startup, text=_("gui", "settings", "general", "autostart")).grid(
+            column=0, row=(irow := 0), sticky="e"
+        )
+        ttk.Checkbutton(
+            startup, variable=self._vars["autostart"], command=self.update_autostart
         ).grid(column=1, row=irow, sticky="w")
         self._vars["autostart"].set(self._query_autostart())
         if sys.platform != "darwin":
-            ttk.Label(
-                checkboxes_frame, text=_("gui", "settings", "general", "tray")
-            ).grid(column=0, row=(irow := irow + 1), sticky="e")
+            ttk.Label(startup, text=_("gui", "settings", "general", "tray")).grid(
+                column=0, row=(irow := irow + 1), sticky="e"
+            )
             ttk.Checkbutton(
-                checkboxes_frame, variable=self._vars["tray"], command=self.update_autostart
+                startup, variable=self._vars["tray"], command=self.update_autostart
             ).grid(column=1, row=irow, sticky="w")
             ttk.Label(
-                checkboxes_frame, text=_("gui", "settings", "general", "tray_notifications")
+                startup, text=_("gui", "settings", "general", "tray_notifications")
             ).grid(column=0, row=(irow := irow + 1), sticky="e")
             ttk.Checkbutton(
-                checkboxes_frame,
+                startup,
                 variable=self._vars["tray_notifications"],
                 command=lambda: setattr(
                     self._settings,
@@ -2092,51 +2125,50 @@ class SettingsPanel:
                     bool(self._vars["tray_notifications"].get()),
                 ),
             ).grid(column=1, row=irow, sticky="w")
-        ttk.Label(
-            checkboxes_frame, text=_("gui", "settings", "general", "dark_mode")
-        ).grid(column=0, row=(irow := irow + 1), sticky="e")
-        ttk.Checkbutton(
-            checkboxes_frame,
-            variable=self._vars["dark_mode"],
-            command=self.update_dark_mode,
-        ).grid(column=1, row=irow, sticky="w")
-        ttk.Label(
-            checkboxes_frame, text=_("gui", "settings", "general", "priority_mode")
-        ).grid(column=0, row=(irow := irow + 1), sticky="e")
+
+        mining = ttk.LabelFrame(
+            left_column, padding=(4, 0, 4, 4), text=_("gui", "settings", "sections", "mining")
+        )
+        mining.grid(column=0, row=2, sticky="ew", pady=(0, 4))
+        ttk.Label(mining, text=_("gui", "settings", "general", "priority_mode")).grid(
+            column=0, row=0, sticky="e"
+        )
         SelectCombobox(
-            checkboxes_frame,
+            mining,
             command=self.priority_mode,
             textvariable=self._vars["priority_mode"],
             values=list(self.PRIORITY_MODES.values()),
-        ).grid(column=1, row=irow, sticky="w")
-        ttk.Label(
-            checkboxes_frame, text=_("gui", "settings", "general", "auto_update")
-        ).grid(column=0, row=(irow := irow + 1), sticky="e")
+        ).grid(column=1, row=0, sticky="w")
+        ttk.Label(mining, text=_("gui", "settings", "general", "auto_update")).grid(
+            column=0, row=1, sticky="e"
+        )
         ttk.Checkbutton(
-            checkboxes_frame,
+            mining,
             variable=self._vars["auto_update"],
             command=lambda: setattr(
                 self._settings,
                 "auto_update",
                 bool(self._vars["auto_update"].get()),
             ),
-        ).grid(column=1, row=irow, sticky="w")
+        ).grid(column=1, row=1, sticky="w")
         ttk.Label(
-            checkboxes_frame,
-            text=_("gui", "settings", "general", "fallback_badges_emotes"),
-        ).grid(column=0, row=(irow := irow + 1), sticky="e")
+            mining, text=_("gui", "settings", "general", "fallback_badges_emotes")
+        ).grid(column=0, row=2, sticky="e")
         ttk.Checkbutton(
-            checkboxes_frame,
+            mining,
             variable=self._vars["fallback_badges_emotes"],
             command=self._toggle_fallback_badges,
-        ).grid(column=1, row=irow, sticky="w")
+        ).grid(column=1, row=2, sticky="w")
 
-        # proxy frame
-        proxy_frame = ttk.Frame(general_center)
-        proxy_frame.grid(column=0, row=2)
-        ttk.Label(proxy_frame, text=_("gui", "settings", "general", "proxy")).grid(column=0, row=0)
+        connection = ttk.LabelFrame(
+            left_column, padding=(4, 0, 4, 4), text=_("gui", "settings", "sections", "connection")
+        )
+        connection.grid(column=0, row=3, sticky="ew", pady=(0, 4))
+        ttk.Label(connection, text=_("gui", "settings", "general", "proxy")).grid(
+            column=0, row=0, sticky="w"
+        )
         self._proxy = PlaceholderEntry(
-            proxy_frame,
+            connection,
             width=37,
             validate="focusout",
             prefill="http://",
@@ -2144,36 +2176,33 @@ class SettingsPanel:
             placeholder="http://username:password@address:port",
         )
         self._proxy.config(validatecommand=partial(proxy_validate, self._proxy, self._settings))
-        self._proxy.grid(column=0, row=1)
-
-        # browser path frame
-        browser_frame = ttk.Frame(general_center)
-        browser_frame.grid(column=0, row=3)
-        ttk.Label(
-            browser_frame, text=_("gui", "settings", "general", "browser_path")
-        ).grid(column=0, row=0, sticky="w")
+        self._proxy.grid(column=0, row=1, sticky="ew")
+        ttk.Label(connection, text=_("gui", "settings", "general", "browser_path")).grid(
+            column=0, row=2, sticky="w", pady=(4, 0)
+        )
         browser_entry = ttk.Entry(
-            browser_frame,
+            connection,
             width=37,
             textvariable=self._vars["browser_path"],
         )
-        browser_entry.grid(column=0, row=1, sticky="ew")
+        browser_entry.grid(column=0, row=3, sticky="ew")
 
         def _save_browser_path(_event: tk.Event | None = None) -> None:
             self._settings.browser_path = self._vars["browser_path"].get().strip()
 
         browser_entry.bind("<FocusOut>", _save_browser_path)
         ttk.Label(
-            browser_frame,
+            connection,
             text=_("gui", "settings", "general", "browser_path_hint"),
             wraplength=280,
-        ).grid(column=0, row=2, sticky="w")
+            style="Muted.TLabel",
+        ).grid(column=0, row=4, sticky="w")
 
         # Advanced section
         advanced_frame = ttk.LabelFrame(
-            center_frame, padding=(4, 0, 4, 4), text=_("gui", "settings", "advanced", "name")
+            left_column, padding=(4, 0, 4, 4), text=_("gui", "settings", "advanced", "name")
         )
-        advanced_frame.grid(column=0, row=1, sticky="nsew")
+        advanced_frame.grid(column=0, row=4, sticky="ew")
         advanced_frame.columnconfigure(0, weight=1)
         advanced_frame.rowconfigure(0, weight=1)
         advanced_center = ttk.Frame(advanced_frame)
@@ -3133,7 +3162,7 @@ class GUIManager:
             sublayout[1] = sublayout[1][1]["children"][0]
             del original[0][1]["children"][1]
             style.layout("TCheckbutton", original)
-        # label style - green, yellow and red text
+        # label style - green, yellow and red text (refined in apply_theme for dark mode)
         style.configure("green.TLabel", foreground="green")
         style.configure("yellow.TLabel", foreground="goldenrod")
         style.configure("red.TLabel", foreground="red")
@@ -3150,15 +3179,15 @@ class GUIManager:
         self.tabs = Notebook(self, root_frame)
         # Tray icon - place after notebook so it draws on top of the tabs space
         self.tray = TrayIcon(self, root_frame)
-        # Main tab
+        # Main tab — build order: status → progress → channels → secondary → output
         main_frame = ttk.Frame(root_frame, padding=8)
         self.tabs.add_tab(main_frame, name=_("gui", "tabs", "main"))
         self.status = StatusBar(self, main_frame)
+        self.progress = CampaignProgress(self, main_frame)
+        self.channels = ChannelList(self, main_frame)
         self.websockets = WebsocketStatus(self, main_frame)
         self.login = LoginForm(self, main_frame)
-        self.progress = CampaignProgress(self, main_frame)
         self.output = ConsoleOutput(self, main_frame)
-        self.channels = ChannelList(self, main_frame)
         # Inventory tab
         inv_frame = ttk.Frame(root_frame, padding=8)
         self.inv = InventoryOverview(self, inv_frame)
@@ -3350,8 +3379,9 @@ class GUIManager:
     async def _poll(self):
         """
         This runs the Tkinter event loop via asyncio instead of calling mainloop.
-        0.01s gives ~100 Hz event processing (smooth scrolling/resizing) while
-        still keeping idle CPU low.
+
+        Busy periods keep ~100 Hz (0.01s) for smooth scrolling/resizing. When the
+        event queue is empty we back off to ~20 Hz (0.05s) to cut idle CPU.
 
         Uses TKINTER_DONT_WAIT to prevent Tcl/Tk from hanging inside native
         system calls (e.g. X11/Wayland input contexts) during heavy UI redraws.
@@ -3362,14 +3392,15 @@ class GUIManager:
         DONT_WAIT = 1 << 1
 
         while True:
+            busy = False
             try:
                 # Drain pending Tk events non-blockingly
                 while do_one_event(DONT_WAIT):
-                    pass
+                    busy = True
             except tk.TclError:
                 # Root window was destroyed
                 break
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0.01 if busy else 0.05)
 
         self._poll_task = None
 
@@ -3543,6 +3574,27 @@ class GUIManager:
         self._fonts["monospaced"] = default_font.copy()
         self._fonts["monospaced"].config(family="Courier New", size=10)
         s.configure("MS.TLabel", font=self._fonts["monospaced"])
+
+        # Root / notebook canvas so untiled edges match the palette
+        try:
+            self._root.configure(background=bg)
+        except tk.TclError:
+            pass
+
+        # Status colors that stay readable on both themes
+        if dark:
+            s.configure("green.TLabel", foreground="#6bcb77", background=bg)
+            s.configure("yellow.TLabel", foreground="#e6c07b", background=bg)
+            s.configure("red.TLabel", foreground="#e06c75", background=bg)
+            watching_bg, watching_fg = "#3a4550", fg
+        else:
+            s.configure("green.TLabel", foreground="green", background=bg)
+            s.configure("yellow.TLabel", foreground="goldenrod", background=bg)
+            s.configure("red.TLabel", foreground="red", background=bg)
+            watching_bg, watching_fg = "gray70", fg
+        self.channels._table.tag_configure(
+            "watching", background=watching_bg, foreground=watching_fg
+        )
 
         # Base containers and labels
         s.configure("TFrame", background=bg, foreground=fg)
