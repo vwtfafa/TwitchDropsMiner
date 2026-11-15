@@ -43,6 +43,7 @@ from utils import (
     ExponentialBackoff,
     redact_url,
     redact_sensitive,
+    find_browser_executable,
 )
 from constants import (
     CALL,
@@ -158,7 +159,9 @@ class _AuthState:
             # login_data = await login_form.ask_login()
             browser: zendriver.Browser | None = None
             try:
-                browser = await zendriver.start()
+                browser = await zendriver.start(
+                    browser_executable_path=str(find_browser_executable())
+                )
                 await browser.get(
                     f"https://www.twitch.tv/login?client_id={client_info.CLIENT_ID}&"
                     f"redirect_params=client_id%3D{client_info.CLIENT_ID}%26"

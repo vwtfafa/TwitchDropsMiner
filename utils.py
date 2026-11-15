@@ -344,6 +344,80 @@ def json_save(path: Path, contents: Mapping[Any, Any], *, sort: bool = False) ->
     new_path.replace(path)
 
 
+def find_browser_executable() -> Path:
+    """
+    Locate a Chromium-based browser for zendriver login.
+
+    zendriver's built-in finder only looks for Brave Stable
+    (`Brave-Browser`), not Nightly/Beta, and skips LOCALAPPDATA for Brave.
+    This helper covers Chrome/Edge/Brave including channel variants.
+    """
+    candidates: list[Path] = []
+    if sys.platform == "win32":
+        roots = [
+            os.environ.get(key)
+            for key in (
+                "PROGRAMFILES",
+                "PROGRAMFILES(X86)",
+                "LOCALAPPDATA",
+                "PROGRAMW6432",
+            )
+        ]
+        for root in roots:
+            if not root:
+                continue
+            base = Path(root)
+            for rel in (
+                # Prefer stable channels first
+                "Google/Chrome/Application/chrome.exe",
+                "BraveSoftware/Brave-Browser/Application/brave.exe",
+                "Microsoft/Edge/Application/msedge.exe",
+                # Then beta / nightly / canary
+                "Google/Chrome Beta/Application/chrome.exe",
+                "BraveSoftware/Brave-Browser-Beta/Application/brave.exe",
+                "BraveSoftware/Brave-Browser-Nightly/Application/brave.exe",
+                "Google/Chrome Canary/Application/chrome.exe",
+                "Google/Chrome SxS/Application/chrome.exe",
+                "Microsoft/Edge Beta/Application/msedge.exe",
+                "Microsoft/Edge Dev/Application/msedge.exe",
+                "Microsoft/Edge SxS/Application/msedge.exe",
+            ):
+                candidates.append(base / rel)
+    elif sys.platform == "darwin":
+        candidates.extend(
+            Path(p)
+            for p in (
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+                "/Applications/Brave Browser Nightly.app/Contents/MacOS/Brave Browser Nightly",
+                "/Applications/Brave Browser Beta.app/Contents/MacOS/Brave Browser Beta",
+                "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+                "/Applications/Chromium.app/Contents/MacOS/Chromium",
+            )
+        )
+    else:
+        for item in os.environ.get("PATH", "").split(os.pathsep):
+            for name in (
+                "google-chrome",
+                "google-chrome-stable",
+                "brave-browser",
+                "brave-browser-nightly",
+                "brave-browser-beta",
+                "brave",
+                "microsoft-edge",
+                "microsoft-edge-stable",
+                "chromium",
+                "chromium-browser",
+                "chrome",
+            ):
+                candidates.append(Path(item) / name)
+
+    for path in candidates:
+        if path.is_file() and os.access(path, os.X_OK):
+            return path.resolve()
+    raise FileNotFoundError("No compatible Chromium browser executable found")
+
+
 def webopen(url: URL | str):
     url_str = str(url)
     if IS_PACKAGED and sys.platform == "linux":

@@ -318,7 +318,8 @@ default_translation: Translation = {
             ),
             "not_found": (
                 "No compatible browser could be found. "
-                "Please install a compatible browser (Chrome, Edge, or Brave) and try again."
+                "Please install a compatible browser "
+                "(Chrome, Edge, or Brave — including Beta/Nightly) and try again."
             ),
         },
         "error_code": "Login error code: {error_code}",
