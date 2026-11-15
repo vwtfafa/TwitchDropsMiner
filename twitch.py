@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import json
 import asyncio
@@ -974,8 +975,18 @@ class Twitch:
             await download_update(session, info, zip_path)
             self.print(_("status", "update_applying"))
             apply_windows_update(zip_path, remote_sha=info.remote_sha)
-            # Exit so the batch script can replace the locked EXE.
+            # Soft-close first, then hard-exit so Windows releases the EXE lock.
+            # The detached .bat waits for our PID before copying (see updater.py).
             self.gui.close()
+            import threading
+            from time import sleep as _sleep
+
+            def _force_exit_for_update() -> None:
+                # Give shutdown a moment, then hard-exit so EXE/DLL locks drop.
+                _sleep(1.5)
+                os._exit(0)
+
+            threading.Thread(target=_force_exit_for_update, daemon=True).start()
         except Exception:
             logger.exception("Failed to apply update")
             msg = _("status", "update_failed")
@@ -1005,8 +1016,8 @@ class Twitch:
         self.gui.start()
         if self.state is State.EXIT:
             return
-        # Show success dialog after a completed auto-update restart.
-        self._notify_update_success_if_needed()
+        # Defer so the main window is mapped before the modal dialog.
+        self.gui._root.after(500, self._notify_update_success_if_needed)
         auth_state = await self.get_auth()
         if self.state is State.EXIT:
             return

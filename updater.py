@@ -107,6 +107,7 @@ async def download_update(
 
 
 UPDATE_SUCCESS_PATH = WORKING_DIR / ".update_success"
+UPDATE_LOG_PATH = WORKING_DIR / "_update_apply.log"
 
 
 def apply_windows_update(zip_path: Path, *, remote_sha: str = "") -> None:
@@ -114,15 +115,19 @@ def apply_windows_update(zip_path: Path, *, remote_sha: str = "") -> None:
     Extract the Windows release zip and schedule a replace-after-exit script.
 
     Only supported for the packaged Windows EXE (not source / AppImage / macOS).
-    After a successful copy, the batch script writes ``.update_success`` so the
-    restarted app can show a confirmation dialog.
+
+    Pattern (common for PyInstaller on Windows):
+    1. Detached ``.bat`` waits until *this* PID exits (file locks released).
+    2. Retries ``xcopy`` many times (AV / leftover locks).
+    3. Writes ``.update_success``, then starts the new EXE with
+       ``PYINSTALLER_RESET_ENVIRONMENT=1`` so a fresh ``_MEI`` / env is used.
+    4. Always attempts restart — even if copy fails — so the user is not stranded.
     """
     if not IS_PACKAGED or IS_APPIMAGE or sys.platform != "win32":
         raise RuntimeError("Auto-update apply is only supported for the Windows EXE build")
 
     extract_dir = WORKING_DIR / "_update_extract"
     if extract_dir.exists():
-        # best-effort cleanup of a previous failed update
         for root, dirs, files in os.walk(extract_dir, topdown=False):
             for name in files:
                 Path(root, name).unlink(missing_ok=True)
@@ -137,38 +142,86 @@ def apply_windows_update(zip_path: Path, *, remote_sha: str = "") -> None:
     # CI packs files under "Twitch Drops Miner/"
     payload = extract_dir / "Twitch Drops Miner"
     if not payload.is_dir():
-        # flat zip fallback
         payload = extract_dir
 
-    bat_path = WORKING_DIR / "_apply_update.bat"
+    install_dir = SELF_PATH.parent
+    bat_path = install_dir / "_apply_update.bat"
+    exe_path = SELF_PATH
     exe_name = SELF_PATH.name
     marker = UPDATE_SUCCESS_PATH
-    sha_safe = (remote_sha or "unknown").replace('"', "")
-    # Use a short delay so this process can exit and release the file lock.
+    log_path = UPDATE_LOG_PATH
+    sha_safe = (remote_sha or "unknown").replace('"', "").replace("%", "")
+    pid = os.getpid()
+
+    # Paths quoted for cmd; use short relative names where we already cd'd.
     bat_contents = f"""@echo off
-setlocal
-cd /d "{WORKING_DIR}"
-echo Applying update...
-timeout /t 3 /nobreak >nul
-xcopy /y /e /i "{payload}\\*" "{WORKING_DIR}\\" >nul
-if errorlevel 1 (
-  echo Update copy failed.
-  exit /b 1
+setlocal EnableExtensions
+cd /d "{install_dir}"
+> "{log_path}" echo update_apply start pid={pid}
+
+REM --- wait until the old process has fully exited (releases EXE + lock.file) ---
+set /a _wait=0
+:wait_pid
+tasklist /FI "PID eq {pid}" 2>nul | findstr /I /C:"{pid}" >nul
+if errorlevel 1 goto unlocked
+set /a _wait+=1
+if %_wait% GEQ 90 (
+  >> "{log_path}" echo timeout waiting for pid {pid}
+  goto unlocked
 )
+timeout /t 1 /nobreak >nul
+goto wait_pid
+
+:unlocked
+>> "{log_path}" echo process unlocked after %_wait%s
+timeout /t 2 /nobreak >nul
+
+REM --- retry copy: Windows/AV can hold locks a few seconds after exit ---
+set /a _try=0
+:retry_copy
+set /a _try+=1
+>> "{log_path}" echo xcopy attempt %_try%
+xcopy /y /e /i /h /r "{payload}\\*" "{install_dir}\\" >> "{log_path}" 2>&1
+if not errorlevel 1 goto copy_ok
+if %_try% LSS 40 (
+  timeout /t 1 /nobreak >nul
+  goto retry_copy
+)
+>> "{log_path}" echo copy FAILED after %_try% attempts
+goto launch
+
+:copy_ok
+>> "{log_path}" echo copy OK
 > "{marker}" echo {sha_safe}
-rmdir /s /q "{extract_dir}"
+rmdir /s /q "{extract_dir}" >> "{log_path}" 2>&1
 del /f /q "{zip_path}" >nul 2>&1
-start "" "{WORKING_DIR}\\{exe_name}"
-del /f /q "%~f0"
+
+:launch
+REM Drop stale single-instance lock if the old process died uncleanly
+del /f /q "{WORKING_DIR}\\lock.file" >nul 2>&1
+set PYINSTALLER_RESET_ENVIRONMENT=1
+>> "{log_path}" echo starting "{exe_path}"
+start "" "{exe_path}"
+if errorlevel 1 (
+  >> "{log_path}" echo start failed, trying by name
+  start "" "{install_dir}\\{exe_name}"
+)
+timeout /t 1 /nobreak >nul
+del /f /q "%~f0" >nul 2>&1
 """
     bat_path.write_text(bat_contents, encoding="utf-8")
-    # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-    flags = 0x00000008 | 0x00000200
+    logger.info("Update script written: %s (waiting for pid %s)", bat_path, pid)
+
+    # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+    flags = 0x00000008 | 0x00000200 | 0x08000000
     subprocess.Popen(
         ["cmd.exe", "/c", str(bat_path)],
-        cwd=str(WORKING_DIR),
+        cwd=str(install_dir),
         creationflags=flags,
         close_fds=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
 
 
