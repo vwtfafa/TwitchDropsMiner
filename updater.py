@@ -180,26 +180,16 @@ def apply_windows_update(
     pid = os.getpid()
 
     # Paths quoted for cmd; use short relative names where we already cd'd.
+    # IMPORTANT: never use `tasklist | findstr` here. In a detached/CREATE_NO_WINDOW
+    # cmd, findstr can hang forever on a broken pipe/stdin (seen with PID wait).
     bat_contents = f"""@echo off
 setlocal EnableExtensions
 cd /d "{install_dir}"
 > "{log_path}" echo update_apply start pid={pid}
 
 REM --- wait until the old process has fully exited (releases EXE + lock.file) ---
-set /a _wait=0
-:wait_pid
-tasklist /FI "PID eq {pid}" 2>nul | findstr /I /C:"{pid}" >nul
-if errorlevel 1 goto unlocked
-set /a _wait+=1
-if %_wait% GEQ 90 (
-  >> "{log_path}" echo timeout waiting for pid {pid}
-  goto unlocked
-)
-timeout /t 1 /nobreak >nul
-goto wait_pid
-
-:unlocked
->> "{log_path}" echo process unlocked after %_wait%s
+powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "try {{ Wait-Process -Id {pid} -Timeout 90 -ErrorAction Stop }} catch {{ }}"
+>> "{log_path}" echo process wait finished
 timeout /t 2 /nobreak >nul
 
 REM --- retry copy: Windows/AV can hold locks a few seconds after exit ---
