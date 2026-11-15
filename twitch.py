@@ -1351,7 +1351,6 @@ class Twitch:
                     no_acl,
                     acl_channels,
                     new_channels,
-                    to_add_topics,
                     ordered_channels,
                     watching_channel,
                 )
