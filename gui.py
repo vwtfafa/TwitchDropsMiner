@@ -449,8 +449,10 @@ class SelectCombobox(ttk.Combobox):
 
 class StatusBar:
     def __init__(self, manager: GUIManager, master: ttk.Widget):
+        self._manager = manager
         frame = ttk.LabelFrame(master, text=_("gui", "status", "name"), padding=(4, 0, 4, 4))
         frame.grid(column=0, row=0, columnspan=3, sticky="nsew", padx=2)
+        frame.columnconfigure(0, weight=1)
         self._label = ttk.Label(frame)
         self._label.grid(column=0, row=0, sticky="nsew")
         # The second line explains *why* the app is in the current state and when
@@ -463,6 +465,23 @@ class StatusBar:
             anchor="w",
         )
         self._hint.grid(column=0, row=1, sticky="nsew")
+        self._pause_btn = ttk.Button(
+            frame,
+            text=_("gui", "tray", "pause"),
+            command=self._on_pause,
+            width=14,
+        )
+        self._pause_btn.grid(column=1, row=0, rowspan=2, sticky="ne", padx=(8, 0))
+
+    def _on_pause(self) -> None:
+        self._manager._twitch.toggle_pause()
+        self.refresh_pause_button()
+
+    def refresh_pause_button(self) -> None:
+        if self._manager._twitch.is_paused:
+            self._pause_btn.config(text=_("gui", "status", "resume"))
+        else:
+            self._pause_btn.config(text=_("gui", "tray", "pause"))
 
     def update(self, text: str):
         self._label.config(text=text)
@@ -1128,6 +1147,34 @@ class ChannelList:
         iid = channel.iid
         del self._channel_map[iid]
         self._table.delete(iid)
+
+    def reconcile(self, ordered: list[Channel]) -> None:
+        """
+        Diff the Treeview against ``ordered``: remove gone rows, update/add the
+        rest, then move rows into the new order. Keeps selection when possible.
+        """
+        selected = self._table.selection()
+        selected_iid = selected[0] if selected else None
+        wanted: dict[str, Channel] = {channel.iid: channel for channel in ordered}
+        for iid in list(self._channel_map):
+            if iid not in wanted:
+                del self._channel_map[iid]
+                if self._table.exists(iid):
+                    self._table.delete(iid)
+        self.begin_bulk()
+        try:
+            for index, channel in enumerate(ordered):
+                iid = channel.iid
+                self.display(channel, add=True)
+                if self._table.exists(iid):
+                    self._table.move(iid, "", index)
+        finally:
+            self.end_bulk()
+        if selected_iid and self._table.exists(selected_iid):
+            self._table.selection_set(selected_iid)
+            self._buttons["switch"].config(state="normal")
+        else:
+            self._buttons["switch"].config(state="disabled")
 
 
 class TrayIcon:

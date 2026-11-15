@@ -47,7 +47,8 @@
             "fetching_inventory": "Lade Inventar...",
             "fetching_campaigns": "Lade Kampagnen...",
             "adding_campaigns": "Kampagnen dem Inventar hinzufügen... {counter}",
-            "paused": "Pausiert"
+            "paused": "Pausiert",
+            "resume": "Mining fortsetzen"
         },
         "tabs": {
             "main": "Hauptseite",

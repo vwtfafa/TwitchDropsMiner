@@ -85,6 +85,7 @@ class GUIStatus(TypedDict):
     fetching_campaigns: str
     adding_campaigns: str
     paused: str
+    resume: str
 
 
 class GUITabs(TypedDict):
@@ -447,6 +448,7 @@ default_translation: Translation = {
             "fetching_campaigns": "Fetching campaigns...",
             "adding_campaigns": "Adding campaigns to inventory... {counter}",
             "paused": "Paused",
+            "resume": "Resume mining",
         },
         "tabs": {
             "main": "Main",

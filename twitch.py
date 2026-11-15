@@ -947,12 +947,13 @@ class Twitch:
                 self.gui.show_info(_("gui", "help", "update", "up_to_date_title"), msg)
             return
 
-        self.print(
-            _("status", "update_available").format(
-                published=info.published_at or "?",
-                sha=info.remote_sha[:7] if info.remote_sha else "?",
-            )
+        available_msg = _("status", "update_available").format(
+            published=info.published_at or "?",
+            sha=info.remote_sha[:7] if info.remote_sha else "?",
         )
+        self.print(available_msg)
+        # Tray toast so background/minimized sessions notice a new build.
+        self.gui.tray.notify(available_msg, _("gui", "help", "update", "title"))
         if not can_auto_apply():
             msg = _("status", "update_manual")
             self.print(msg)
@@ -1223,11 +1224,11 @@ class Twitch:
                     self.print(message)
                     self._advance_state(State.IDLE, reason=hint)
             elif self.state is State.CHANNELS_FETCH:
-                # Start with all current channels. Keep the channel map alive until
-                # revalidation completes, so websocket events arriving during the
-                # GQL work still find their channel instead of being dropped.
+                # Keep the channel map + GUI alive during revalidation so websocket
+                # events still resolve and the Treeview can be reconciled (diff)
+                # instead of cleared and rebuilt.
                 new_channels: set[Channel] = set(channels.values())
-                self.gui.channels.clear()
+                prior_ids: set[int] = set(channels)
                 # gather and add ACL channels from campaigns
                 # NOTE: we consider only campaigns that can be progressed
                 # NOTE: we use another set so that we can set them online separately
@@ -1279,44 +1280,50 @@ class Twitch:
                 # ensure that we won't end up with more channels than we can handle
                 # NOTE: we trim from the end because that's where the non-priority,
                 # offline (or online but low viewers) channels end up
-                to_remove_channels = ordered_channels[MAX_CHANNELS:]
                 ordered_channels = ordered_channels[:MAX_CHANNELS]
-                if to_remove_channels:
-                    # tracked channels and gui were cleared earlier, so no need to do it here
-                    # just make sure to unsubscribe from their topics
+                ordered_ids = {channel.id for channel in ordered_channels}
+                # Unsubscribe + drop channels that fell out of the list
+                dropped = [ch for ch in list(channels.values()) if ch.id not in ordered_ids]
+                if dropped:
                     to_remove_topics = []
-                    for channel in to_remove_channels:
+                    for channel in dropped:
                         to_remove_topics.append(
                             WebsocketTopic.as_str("Channel", "StreamState", channel.id)
                         )
                         to_remove_topics.append(
                             WebsocketTopic.as_str("Channel", "StreamUpdate", channel.id)
                         )
+                        del channels[channel.id]
                     self.websocket.remove_topics(to_remove_topics)
-                    del to_remove_channels, to_remove_topics
-                # set our new channel list (bulk UI insert avoids per-row redraws)
-                channels.clear()
-                self.gui.channels.begin_bulk()
-                try:
-                    for channel in ordered_channels:
-                        channels[channel.id] = channel
-                        channel.display(add=True)
-                finally:
-                    self.gui.channels.end_bulk()
-                # subscribe to these channel's state updates
-                to_add_topics: list[WebsocketTopic] = []
-                for channel_id in channels:
-                    to_add_topics.append(
-                        WebsocketTopic(
-                            "Channel", "StreamState", channel_id, self.process_stream_state
+                    del dropped, to_remove_topics
+                # Update map, then reconcile the Treeview (keeps selection/scroll)
+                for channel in ordered_channels:
+                    channels[channel.id] = channel
+                self.gui.channels.reconcile(ordered_channels)
+                # Subscribe only to newly added channels
+                added_ids = ordered_ids - prior_ids
+                if added_ids:
+                    to_add_topics: list[WebsocketTopic] = []
+                    for channel_id in added_ids:
+                        to_add_topics.append(
+                            WebsocketTopic(
+                                "Channel",
+                                "StreamState",
+                                channel_id,
+                                self.process_stream_state,
+                            )
                         )
-                    )
-                    to_add_topics.append(
-                        WebsocketTopic(
-                            "Channel", "StreamUpdate", channel_id, self.process_stream_update
+                        to_add_topics.append(
+                            WebsocketTopic(
+                                "Channel",
+                                "StreamUpdate",
+                                channel_id,
+                                self.process_stream_update,
+                            )
                         )
-                    )
-                self.websocket.add_topics(to_add_topics)
+                    self.websocket.add_topics(to_add_topics)
+                    del to_add_topics
+                del prior_ids, ordered_ids, added_ids
                 # relink watching channel after cleanup,
                 # or stop watching it if it no longer qualifies
                 # NOTE: this replaces 'self.watching_channel's internal value with the new object
@@ -1608,6 +1615,7 @@ class Twitch:
             self.print(_("status", "resumed"))
             self.gui.set_state_hint("")
             self.request_state(State.CHANNEL_SWITCH)
+        self.gui.status.refresh_pause_button()
 
     def skip_watching_channel(self) -> None:
         """Tray: skip the current channel for this session."""
