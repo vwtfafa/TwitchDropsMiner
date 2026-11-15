@@ -5,5 +5,5 @@ truststore>=0.10.5,<0.11
 zendriver>=0.17.1,<0.18
 
 # environment-dependent dependencies
-PyGObject>=3.48,<3.59; sys_platform == "linux"  # required for better system tray support on Linux
+PyGObject>=3.48,<3.51; sys_platform == "linux"  # <3.51 stays on girepository-1.0 (CI/AppImage); 3.52+ needs girepository-2.0
 pywin32>=308; sys_platform == "win32"
