@@ -7,6 +7,7 @@ import sys
 import json
 import random
 import string
+import shutil
 import asyncio
 import logging
 import traceback
@@ -19,15 +20,18 @@ from contextlib import suppress
 from functools import cached_property
 from datetime import datetime, timezone
 from collections import abc, OrderedDict
-from typing import Any, Literal, Callable, Generic, Mapping, TypeVar, ParamSpec, cast
+from typing import Any, Literal, Callable, Generic, Mapping, TypeVar, ParamSpec, cast, TYPE_CHECKING
 
 from yarl import URL
 from PIL.ImageTk import PhotoImage
 from PIL import Image as Image_module
 
 from exceptions import ExitRequest, ReloadRequest
-from constants import IS_PACKAGED, JsonType, PriorityMode
+from constants import COOKIES_PATH, IS_PACKAGED, WORKING_DIR, JsonType, PriorityMode
 from constants import _resource_path as resource_path  # noqa
+
+if TYPE_CHECKING:
+    import aiohttp
 
 
 _T = TypeVar("_T")  # type
@@ -344,14 +348,56 @@ def json_save(path: Path, contents: Mapping[Any, Any], *, sort: bool = False) ->
     new_path.replace(path)
 
 
-def find_browser_executable() -> Path:
+def backup_cookies() -> Path | None:
+    """Copy cookies.jar to cookies.jar.bak before login/clear operations."""
+    if not COOKIES_PATH.exists():
+        return None
+    backup_path = COOKIES_PATH.with_name(f"{COOKIES_PATH.name}.bak")
+    shutil.copy2(COOKIES_PATH, backup_path)
+    return backup_path
+
+
+async def check_dev_build_update(session: aiohttp.ClientSession) -> str | None:
+    """Return ISO published_at if GitHub dev-build is newer than local; else None."""
+    url = "https://api.github.com/repos/vwtfafa/TwitchDropsMiner/releases/tags/dev-build"
+    seen_path = WORKING_DIR / ".update_seen"
+    try:
+        async with session.get(url) as response:
+            if response.status != 200:
+                return None
+            data = await response.json()
+        published_at = data.get("published_at")
+        if not isinstance(published_at, str) or not published_at:
+            return None
+        last_seen = ""
+        if seen_path.exists():
+            last_seen = seen_path.read_text(encoding="utf8").strip()
+        if not last_seen:
+            # First run: remember current release without nagging.
+            seen_path.write_text(published_at, encoding="utf8")
+            return None
+        if published_at <= last_seen:
+            return None
+        seen_path.write_text(published_at, encoding="utf8")
+        return published_at
+    except Exception:
+        logger.debug("Dev-build update check failed", exc_info=True)
+        return None
+
+
+def find_browser_executable(preferred: str | Path | None = None) -> Path:
     """
     Locate a Chromium-based browser for zendriver login.
 
-    zendriver's built-in finder only looks for Brave Stable
-    (`Brave-Browser`), not Nightly/Beta, and skips LOCALAPPDATA for Brave.
-    This helper covers Chrome/Edge/Brave including channel variants.
+    If ``preferred`` is a non-empty path to an existing file, that path is used.
+    Otherwise auto-detects Chrome/Edge/Brave including channel variants
+    (zendriver's finder only looks for Brave Stable and skips LOCALAPPDATA).
     """
+    if preferred:
+        preferred_path = Path(preferred)
+        if preferred_path.is_file():
+            return preferred_path.resolve()
+
     candidates: list[Path] = []
     if sys.platform == "win32":
         roots = [

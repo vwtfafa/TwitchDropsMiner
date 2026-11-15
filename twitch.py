@@ -44,6 +44,8 @@ from utils import (
     redact_url,
     redact_sensitive,
     find_browser_executable,
+    backup_cookies,
+    check_dev_build_update,
 )
 from constants import (
     CALL,
@@ -126,6 +128,7 @@ class _AuthState:
             if session is not None:
                 jar = cast(aiohttp.CookieJar, session.cookie_jar)
                 jar.clear()
+                backup_cookies()
                 COOKIES_PATH.unlink(missing_ok=True)
 
     def clear(self) -> None:
@@ -159,8 +162,11 @@ class _AuthState:
             # login_data = await login_form.ask_login()
             browser: zendriver.Browser | None = None
             try:
+                backup_cookies()
                 browser = await zendriver.start(
-                    browser_executable_path=str(find_browser_executable())
+                    browser_executable_path=str(
+                        find_browser_executable(self._twitch.settings.browser_path)
+                    )
                 )
                 await browser.get(
                     f"https://www.twitch.tv/login?client_id={client_info.CLIENT_ID}&"
@@ -514,6 +520,7 @@ class _AuthState:
                 # otherwise, we need to delete the entire cookie file and clear the jar
                 logger.info("Cookie client ID mismatch")
                 jar.clear()
+                backup_cookies()
                 COOKIES_PATH.unlink(missing_ok=True)
             else:
                 raise RuntimeError("Login verification failure (step #1)")
@@ -555,6 +562,7 @@ class Twitch:
         self.inventory: list[DropsCampaign] = []
         self._drops: dict[str, TimedDrop] = {}
         self._campaigns: dict[str, DropsCampaign] = {}
+        self._unlinked_warn_ids: set[str] = set()
         self._mnt_triggers: deque[datetime] = deque()
         # triggers at which a drop stops being completable in time, these re-pick the games
         self._deadline_triggers: set[datetime] = set()
@@ -900,6 +908,13 @@ class Twitch:
             _("gui", "status", "no_matching_reason"),
         )
 
+    @task_wrapper
+    async def _check_update(self) -> None:
+        session = await self.get_session()
+        published = await check_dev_build_update(session)
+        if published:
+            self.print(_("status", "update_available").format(published=published))
+
     async def _run(self):
         """
         Main method that runs the whole client.
@@ -915,6 +930,7 @@ class Twitch:
         auth_state = await self.get_auth()
         if self.state is State.EXIT:
             return
+        asyncio.create_task(self._check_update())
         await self.websocket.start()
         if self.state is State.EXIT:
             return
@@ -1395,6 +1411,21 @@ class Twitch:
             status_text = _("status", "watching").format(channel=channel.name)
             self.print(status_text)
             self.gui.status.update(status_text)
+        # Warn once when mining a campaign that Twitch reports as unlinked —
+        # progress/claim for game entitlements may still fail server-side.
+        campaign = self.get_active_campaign(channel)
+        if (
+            campaign is not None
+            and not campaign.linked
+            and not campaign.only_badges_or_emotes
+            and campaign.id not in self._unlinked_warn_ids
+        ):
+            self._unlinked_warn_ids.add(campaign.id)
+            self.print(
+                _("status", "unlinked_warning").format(
+                    campaign=campaign.name, game=campaign.game.name
+                )
+            )
 
     def stop_watching(self):
         self.gui.clear_drop()
@@ -1735,7 +1766,14 @@ class Twitch:
                                 force_retry = True
                                 break
                     else:
-                        raise GQLException(response_json['errors'])
+                        errors = response_json["errors"]
+                        if any(
+                            e.get("message") == "PersistedQueryNotFound"
+                            for e in errors
+                            if isinstance(e, dict)
+                        ):
+                            self.print(_("error", "gql_outdated"))
+                        raise GQLException(errors)
                 # Other error handling
                 elif "error" in response_json:
                     raise GQLException(

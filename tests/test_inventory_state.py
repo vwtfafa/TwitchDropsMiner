@@ -28,7 +28,7 @@ class FakeGUI:
 
 
 class FakeSettings:
-    enable_badges_emotes = False
+    pass
 
 
 class FakeTwitch:

@@ -22,6 +22,8 @@ class StatusMessages(TypedDict):
     no_priority: str
     no_matching_campaigns: str
     progress_stalled: str
+    unlinked_warning: str
+    update_available: str
 
 
 class BrowserMessages(TypedDict):
@@ -47,6 +49,7 @@ class ErrorMessages(TypedDict):
     captcha: str
     no_connection: str
     site_down: str
+    gql_outdated: str
 
 
 class GUIStatus(TypedDict):
@@ -74,6 +77,7 @@ class GUIStatus(TypedDict):
 class GUITabs(TypedDict):
     main: str
     inventory: str
+    this_week: str
     settings: str
     help: str
 
@@ -208,14 +212,30 @@ class GUISettingsGeneral(TypedDict):
     dark_mode: str
     priority_mode: str
     proxy: str
+    browser_path: str
+    browser_path_hint: str
 
 
 class GUISettingsAdvanced(TypedDict):
     name: str
     warning: str
     warning_text: str
-    enable_badges_emotes: str
     available_drops_check: str
+
+
+class GUIWeekly(TypedDict):
+    intro: str
+    refresh: str
+    only_linked: str
+    apply: str
+    apply_merge: str
+    nothing_ticked: str
+    applied: str
+    refreshing: str
+    no_data: str
+    no_match: str
+    count: str
+    link_account: str
 
 
 class GUIPriorityModes(TypedDict):
@@ -265,6 +285,7 @@ class GUIMessages(TypedDict):
     progress: GUIProgress
     channels: GUIChannels
     inventory: GUIInventory
+    weekly: GUIWeekly
     settings: GUISettings
     help: GUIHelp
 
@@ -301,6 +322,14 @@ default_translation: Translation = {
             "Estimated drop progress reached its limit for {game}. "
             "Resyncing with Twitch..."
         ),
+        "unlinked_warning": (
+            "Mining \"{campaign}\" ({game}) without a linked game account. "
+            "Twitch may still refuse progress or claims for game items."
+        ),
+        "update_available": (
+            "A newer development build is available "
+            "(published {published}). Check the GitHub releases page."
+        ),
     },
     "login": {
         "unexpected_content": (
@@ -333,6 +362,10 @@ default_translation: Translation = {
         "captcha": "Your login attempt was denied by CAPTCHA.\nPlease try again in 12+ hours.",
         "site_down": "Twitch is down, retrying in {seconds} seconds...",
         "no_connection": "Cannot connect to Twitch, retrying in {seconds} seconds... ({url})",
+        "gql_outdated": (
+            "Twitch rejected a GraphQL query (PersistedQueryNotFound). "
+            "The miner may need an update — Twitch changed their API."
+        ),
     },
     "gui": {
         "output": "Output",
@@ -360,6 +393,7 @@ default_translation: Translation = {
         "tabs": {
             "main": "Main",
             "inventory": "Inventory",
+            "this_week": "This Week",
             "settings": "Settings",
             "help": "Help",
         },
@@ -420,7 +454,7 @@ default_translation: Translation = {
             "filter": {
                 "name": "Filter",
                 "show": "Show:",
-                "not_linked": "Not linked",
+                "not_linked": "Unlinked (Twitch account link)",
                 "upcoming": "Upcoming",
                 "expired": "Expired",
                 "excluded": "Excluded",
@@ -478,6 +512,11 @@ default_translation: Translation = {
                 "dark_mode": "Dark mode: ",
                 "priority_mode": "Priority mode: ",
                 "proxy": "Proxy (requires restart):",
+                "browser_path": "Browser path (empty = auto):",
+                "browser_path_hint": (
+                    "Optional path to chrome.exe / brave.exe / msedge.exe. "
+                    "Leave empty to auto-detect (including Brave Nightly)."
+                ),
             },
             "advanced": {
                 "name": "Advanced",
@@ -487,7 +526,6 @@ default_translation: Translation = {
                     "If you're experiencing any issues, "
                     "make sure all of these options are disabled."
                 ),
-                "enable_badges_emotes": "Enable partial support for badges and emotes: ",
                 "available_drops_check": "Enable extra available drops check: ",
             },
             "priority_modes": {
@@ -503,6 +541,29 @@ default_translation: Translation = {
                 "Reload fetches new campaigns; priority and exclude changes "
                 "apply automatically: "
             ),
+        },
+        "weekly": {
+            "intro": (
+                "Tick campaigns for this week, then Apply. "
+                "Selected games are merged into your Priority list."
+            ),
+            "refresh": "Refresh from Twitch",
+            "only_linked": "Only show account-linked campaigns",
+            "apply": "Apply selection (merge into Priority)",
+            "apply_merge": "Merge into Priority and start",
+            "nothing_ticked": "Nothing ticked — select at least one campaign first.",
+            "applied": "Merged {count} game(s) into Priority: {games}. Reloading…",
+            "refreshing": "Refreshing from Twitch… (updates in a few seconds)",
+            "no_data": (
+                "No campaign data yet — log in and let the inventory finish loading, "
+                "then hit Refresh."
+            ),
+            "no_match": "No campaigns match for the coming week.",
+            "count": (
+                "{total} campaign(s) this week. "
+                "{selected} pre-selected from your priority list."
+            ),
+            "link_account": "Link account",
         },
         "help": {
             "links": {

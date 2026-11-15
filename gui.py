@@ -1971,7 +1971,7 @@ class _SettingsVars(TypedDict):
     language: StringVar
     priority_mode: StringVar
     tray_notifications: IntVar
-    enable_badges_emotes: IntVar
+    browser_path: StringVar
     available_drops_check: IntVar
 
 
@@ -2006,9 +2006,7 @@ class SettingsPanel:
             "dark_mode": IntVar(master, int(self._settings.dark_mode)),
             "priority_mode": StringVar(master, self.PRIORITY_MODES[priority_mode]),
             "tray_notifications": IntVar(master, self._settings.tray_notifications),
-            "enable_badges_emotes": IntVar(
-                master, int(self._settings.enable_badges_emotes)
-            ),
+            "browser_path": StringVar(master, self._settings.browser_path),
             "available_drops_check": IntVar(
                 master, int(self._settings.available_drops_check)
             ),
@@ -2105,6 +2103,29 @@ class SettingsPanel:
         self._proxy.config(validatecommand=partial(proxy_validate, self._proxy, self._settings))
         self._proxy.grid(column=0, row=1)
 
+        # browser path frame
+        browser_frame = ttk.Frame(general_center)
+        browser_frame.grid(column=0, row=3)
+        ttk.Label(
+            browser_frame, text=_("gui", "settings", "general", "browser_path")
+        ).grid(column=0, row=0, sticky="w")
+        browser_entry = ttk.Entry(
+            browser_frame,
+            width=37,
+            textvariable=self._vars["browser_path"],
+        )
+        browser_entry.grid(column=0, row=1, sticky="ew")
+
+        def _save_browser_path(_event: tk.Event | None = None) -> None:
+            self._settings.browser_path = self._vars["browser_path"].get().strip()
+
+        browser_entry.bind("<FocusOut>", _save_browser_path)
+        ttk.Label(
+            browser_frame,
+            text=_("gui", "settings", "general", "browser_path_hint"),
+            wraplength=280,
+        ).grid(column=0, row=2, sticky="w")
+
         # Advanced section
         advanced_frame = ttk.LabelFrame(
             center_frame, padding=(4, 0, 4, 4), text=_("gui", "settings", "advanced", "name")
@@ -2124,19 +2145,6 @@ class SettingsPanel:
             text=_("gui", "settings", "advanced", "warning_text"),
             foreground="goldenrod",
         ).grid(column=0, row=(irow := irow + 1), columnspan=2)
-        # Toggles for badges and emotes, and available drops check
-        ttk.Label(
-            advanced_center, text=_("gui", "settings", "advanced", "enable_badges_emotes")
-        ).grid(column=0, row=(irow := irow + 1), sticky="e")
-        ttk.Checkbutton(
-            advanced_center,
-            variable=self._vars["enable_badges_emotes"],
-            command=lambda: setattr(
-                self._settings,
-                "enable_badges_emotes",
-                bool(self._vars["enable_badges_emotes"].get()),
-            ),
-        ).grid(column=1, row=irow, sticky="w")
         ttk.Label(
             advanced_center, text=_("gui", "settings", "advanced", "available_drops_check")
         ).grid(column=0, row=(irow := irow + 1), sticky="e")
@@ -2693,9 +2701,9 @@ class HelpTab:
 class WeeklyPicker:
     """
     "This Week" tab: lists the active/upcoming drop campaigns for the coming week
-    with a checkbox each. Applying the selection writes the chosen games into the
-    priority list, switches to PRIORITY_ONLY mode, and triggers a reload so the
-    miner starts collecting them from live participating channels.
+    with a checkbox each. Applying the selection merges chosen games into the
+    priority list (chosen first), switches to PRIORITY_ONLY mode, and triggers a
+    reload so the miner starts collecting them from live participating channels.
     """
     WEEK_DAYS = 7
 
@@ -2717,27 +2725,23 @@ class WeeklyPicker:
         top.grid(column=0, row=0, columnspan=2, sticky="ew")
         ttk.Label(
             top,
-            text=(
-                "Tick the campaigns you want to farm this week, then Apply. "
-                "The miner will prioritise those games and collect them from "
-                "live participating channels."
-            ),
+            text=_("gui", "weekly", "intro"),
             wraplength=680,
             justify="left",
         ).grid(column=0, row=0, columnspan=6, sticky="w", pady=(0, 4))
-        ttk.Button(top, text="🔄 Refresh from Twitch", command=self.refetch).grid(
-            column=0, row=1, sticky="w"
-        )
+        ttk.Button(
+            top, text=_("gui", "weekly", "refresh"), command=self.refetch
+        ).grid(column=0, row=1, sticky="w")
         self._hide_ineligible = IntVar(master, 0)
         ttk.Checkbutton(
             top,
-            text="Only show ones I can earn (account-linked)",
+            text=_("gui", "weekly", "only_linked"),
             variable=self._hide_ineligible,
             command=self.refresh,
         ).grid(column=1, row=1, sticky="w", padx=(10, 0))
-        ttk.Button(top, text="✅ Apply selection ▶ start mining", command=self.apply).grid(
-            column=2, row=1, sticky="w", padx=(10, 0)
-        )
+        ttk.Button(
+            top, text=_("gui", "weekly", "apply"), command=self.apply
+        ).grid(column=2, row=1, sticky="w", padx=(10, 0))
         self._status = ttk.Label(top, text="", padding=(0, 4, 0, 0))
         self._status.grid(column=0, row=2, columnspan=6, sticky="w")
 
@@ -2777,7 +2781,7 @@ class WeeklyPicker:
         # Pull fresh data from Twitch: account-link status, progress, new/expired
         # campaigns. The fetch is async; fetch_inventory() calls refresh() on this
         # tab when it finishes, so the rows update themselves once it completes.
-        self._status.config(text="⏳ Refreshing from Twitch… (updates in a few seconds)")
+        self._status.config(text=_("gui", "weekly", "refreshing"))
         self._manager._twitch.request_state(State.INVENTORY_FETCH)
 
     def configure_theme(self, *, bg: str) -> None:
@@ -2814,15 +2818,14 @@ class WeeklyPicker:
         if not self._manager._twitch.inventory:
             ttk.Label(
                 self._list,
-                text="No campaign data yet — log in and let the inventory finish loading, "
-                "then hit Refresh.",
+                text=_("gui", "weekly", "no_data"),
                 padding=8,
             ).grid(column=0, row=0, sticky="w")
             return
         if not campaigns:
             ttk.Label(
                 self._list,
-                text="No campaigns match for the coming week.",
+                text=_("gui", "weekly", "no_match"),
                 padding=8,
             ).grid(column=0, row=0, sticky="w")
             return
@@ -2866,7 +2869,7 @@ class WeeklyPicker:
             if rewards:
                 if len(rewards) > 100:
                     rewards = rewards[:100] + "…"
-                ttk.Label(row, text=f"🎁 {rewards}", foreground="#888").grid(
+                ttk.Label(row, text=rewards, foreground="#888").grid(
                     column=2, row=2, sticky="w"
                 )
 
@@ -2875,13 +2878,15 @@ class WeeklyPicker:
             if not c.linked and c.link_url:
                 ttk.Button(
                     row,
-                    text="🔗 Link account",
+                    text=_("gui", "weekly", "link_account"),
                     command=lambda url=c.link_url: webopen(url),
                 ).grid(column=3, row=0, rowspan=3, sticky="e", padx=(6, 0))
 
         self._status.config(
-            text=f"{len(campaigns)} campaign(s) this week. "
-            f"{sum(v.get() for v, _c in self._rows.values())} pre-selected from your priority list."
+            text=_("gui", "weekly", "count").format(
+                total=len(campaigns),
+                selected=sum(v.get() for v, _c in self._rows.values()),
+            )
         )
 
     def apply(self) -> None:
@@ -2890,9 +2895,11 @@ class WeeklyPicker:
             if var.get() and c.game.name not in chosen:
                 chosen.append(c.game.name)
         if not chosen:
-            self._status.config(text="⚠ Nothing ticked — select at least one campaign first.")
+            self._status.config(text=_("gui", "weekly", "nothing_ticked"))
             return
-        self._settings.priority = chosen
+        # Merge: chosen games first, then existing priority entries not in chosen
+        remaining = [g for g in self._settings.priority if g not in chosen]
+        self._settings.priority = chosen + remaining
         self._settings.priority_mode = PriorityMode.PRIORITY_ONLY
         self._settings.alter()
         self._settings.save(force=True)
@@ -2900,7 +2907,9 @@ class WeeklyPicker:
         if self._manager.settings is not None:
             self._manager.settings.reload_priority_display()
         self._status.config(
-            text=f"✅ Applied {len(chosen)} game(s): {', '.join(chosen)}. Reloading…"
+            text=_("gui", "weekly", "applied").format(
+                count=len(chosen), games=", ".join(chosen)
+            )
         )
         # reload inventory + re-evaluate priorities, which kicks off mining
         self._manager._twitch.request_state(State.INVENTORY_FETCH)
@@ -2922,6 +2931,13 @@ class GUIManager:
         # root.resizable(False, True)
         set_root_icon(root, resource_path("icons/pickaxe.ico"))
         root.title(WINDOW_TITLE)  # window title
+        if sys.platform == "win32":
+            try:
+                # SetProcessDpiAwareness already called in main.py; scale Tk to system DPI
+                dpi = root.winfo_fpixels("1i")
+                root.tk.call("tk", "scaling", dpi / 72.0)
+            except tk.TclError:
+                pass
         root.bind_all("<KeyPress-Escape>", self.unfocus)  # pressing ESC unfocuses selection
         # Image cache for displaying images
         self._cache = ImageCache(self)
@@ -2988,7 +3004,7 @@ class GUIManager:
         # This Week tab (weekly campaign picker)
         week_frame = ttk.Frame(root_frame, padding=8)
         self.weekly = WeeklyPicker(self, week_frame)
-        self.tabs.add_tab(week_frame, name="This Week")
+        self.tabs.add_tab(week_frame, name=_("gui", "tabs", "this_week"))
         # Settings tab - built lazily on first view. It contains a lot of widgets
         # and is rarely the tab a user needs first, so this keeps startup snappier.
         settings_frame = ttk.Frame(root_frame, padding=8)
@@ -3630,7 +3646,7 @@ if __name__ == "__main__":
                 autostart_tray=False,
                 exclude={"Lit Game"},
                 tray_notifications=True,
-                enable_badges_emotes=False,
+                browser_path="",
                 available_drops_check=False,
                 logging_level=LOGGING_LEVELS[0],
                 priority_mode=PriorityMode.PRIORITY_ONLY,
