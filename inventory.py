@@ -557,14 +557,28 @@ class DropsCampaign:
 
     @property
     def eligible(self) -> bool:
+        # Linked game campaigns are always eligible.
+        if self.linked:
+            return True
+        # Badge/emote-only campaigns do not require a game account link.
+        if self.only_badges_or_emotes:
+            return True
+        # Mixed campaigns (badges + entitlements): optional partial support.
         if self.has_badge_or_emote:
             return self._twitch.settings.enable_badges_emotes
-        return self.linked
+        return False
 
     @cached_property
     def has_badge_or_emote(self) -> bool:
         return any(
             benefit.type.is_badge_or_emote() for drop in self.drops for benefit in drop.benefits
+        )
+
+    @cached_property
+    def only_badges_or_emotes(self) -> bool:
+        benefits = [benefit for drop in self.drops for benefit in drop.benefits]
+        return bool(benefits) and all(
+            benefit.type.is_badge_or_emote() for benefit in benefits
         )
 
     @property

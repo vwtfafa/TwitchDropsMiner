@@ -34,7 +34,7 @@ default_settings: SettingsFile = {
     "connection_quality": 1,
     "language": DEFAULT_LANG,
     "tray_notifications": True,
-    "enable_badges_emotes": False,
+    "enable_badges_emotes": True,
     "available_drops_check": False,
     "priority_mode": PriorityMode.PRIORITY_ONLY,
 }
