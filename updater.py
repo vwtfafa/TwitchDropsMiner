@@ -106,11 +106,16 @@ async def download_update(
     return dest_zip
 
 
-def apply_windows_update(zip_path: Path) -> None:
+UPDATE_SUCCESS_PATH = WORKING_DIR / ".update_success"
+
+
+def apply_windows_update(zip_path: Path, *, remote_sha: str = "") -> None:
     """
     Extract the Windows release zip and schedule a replace-after-exit script.
 
     Only supported for the packaged Windows EXE (not source / AppImage / macOS).
+    After a successful copy, the batch script writes ``.update_success`` so the
+    restarted app can show a confirmation dialog.
     """
     if not IS_PACKAGED or IS_APPIMAGE or sys.platform != "win32":
         raise RuntimeError("Auto-update apply is only supported for the Windows EXE build")
@@ -137,6 +142,8 @@ def apply_windows_update(zip_path: Path) -> None:
 
     bat_path = WORKING_DIR / "_apply_update.bat"
     exe_name = SELF_PATH.name
+    marker = UPDATE_SUCCESS_PATH
+    sha_safe = (remote_sha or "unknown").replace('"', "")
     # Use a short delay so this process can exit and release the file lock.
     bat_contents = f"""@echo off
 setlocal
@@ -144,6 +151,11 @@ cd /d "{WORKING_DIR}"
 echo Applying update...
 timeout /t 3 /nobreak >nul
 xcopy /y /e /i "{payload}\\*" "{WORKING_DIR}\\" >nul
+if errorlevel 1 (
+  echo Update copy failed.
+  exit /b 1
+)
+> "{marker}" echo {sha_safe}
 rmdir /s /q "{extract_dir}"
 del /f /q "{zip_path}" >nul 2>&1
 start "" "{WORKING_DIR}\\{exe_name}"
@@ -158,6 +170,24 @@ del /f /q "%~f0"
         creationflags=flags,
         close_fds=True,
     )
+
+
+def consume_update_success() -> str | None:
+    """
+    If the previous launch finished applying an update, return its SHA and clear
+    the marker. Otherwise return None.
+    """
+    if not UPDATE_SUCCESS_PATH.exists():
+        return None
+    try:
+        sha = UPDATE_SUCCESS_PATH.read_text(encoding="utf-8").strip() or "unknown"
+    except OSError:
+        sha = "unknown"
+    try:
+        UPDATE_SUCCESS_PATH.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return sha
 
 
 def can_auto_apply() -> bool:

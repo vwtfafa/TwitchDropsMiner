@@ -50,6 +50,7 @@ from updater import (
     UpdateInfo,
     apply_windows_update,
     can_auto_apply,
+    consume_update_success,
     download_update,
     fetch_update_info,
 )
@@ -972,15 +973,25 @@ class Twitch:
         try:
             await download_update(session, info, zip_path)
             self.print(_("status", "update_applying"))
-            apply_windows_update(zip_path)
+            apply_windows_update(zip_path, remote_sha=info.remote_sha)
             # Exit so the batch script can replace the locked EXE.
             self.gui.close()
         except Exception:
             logger.exception("Failed to apply update")
-            self.print(_("status", "update_failed"))
+            msg = _("status", "update_failed")
+            self.print(msg)
+            self.gui.show_error(_("gui", "help", "update", "failed_title"), msg)
 
     def request_update_check(self) -> None:
         asyncio.create_task(self._check_update(interactive=True))
+
+    def _notify_update_success_if_needed(self) -> None:
+        sha = consume_update_success()
+        if not sha:
+            return
+        msg = _("status", "update_success").format(sha=sha[:7] if sha != "unknown" else sha)
+        self.print(msg)
+        self.gui.show_info(_("gui", "help", "update", "success_title"), msg)
 
     async def _run(self):
         """
@@ -994,6 +1005,8 @@ class Twitch:
         self.gui.start()
         if self.state is State.EXIT:
             return
+        # Show success dialog after a completed auto-update restart.
+        self._notify_update_success_if_needed()
         auth_state = await self.get_auth()
         if self.state is State.EXIT:
             return

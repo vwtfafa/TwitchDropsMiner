@@ -30,6 +30,7 @@ class StatusMessages(TypedDict):
     update_downloading: str
     update_applying: str
     update_failed: str
+    update_success: str
 
 
 class BrowserMessages(TypedDict):
@@ -281,6 +282,7 @@ class GUIHelpUpdate(TypedDict):
     confirm: str
     up_to_date_title: str
     failed_title: str
+    success_title: str
 
 
 class GUIHelp(TypedDict):
@@ -357,6 +359,7 @@ default_translation: Translation = {
         "update_downloading": "Downloading update…",
         "update_applying": "Update downloaded. Restarting to apply…",
         "update_failed": "Update failed. Please download the release manually.",
+        "update_success": "Update installed successfully (commit {sha}).",
     },
     "login": {
         "unexpected_content": (
@@ -642,6 +645,7 @@ default_translation: Translation = {
                 "title": "Update available",
                 "up_to_date_title": "No updates",
                 "failed_title": "Update check failed",
+                "success_title": "Update installed",
                 "confirm": (
                     "A newer build is available "
                     "(published {published}, commit {sha}).\n\n"
