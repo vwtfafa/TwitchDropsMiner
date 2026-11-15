@@ -1896,6 +1896,9 @@ class Twitch:
         # Populate the inventory list. Rows are native Treeview items, so this
         # is instant and starts no image downloads; details load on selection.
         self.gui.inv.set_campaigns(campaigns)
+        # Re-render the "This Week" tab now that inventory (incl. account-link
+        # status) is fresh; it doesn't need CDN images.
+        self.gui.weekly.refresh()
         self._mnt_triggers.extend(sorted(switch_triggers))
         # trim out all triggers that we're already past
         now = datetime.now(timezone.utc)
