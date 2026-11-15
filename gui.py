@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import json
 import shlex
 import ctypes
 import asyncio
@@ -18,7 +19,7 @@ from dataclasses import dataclass
 from tkinter.font import Font, nametofont
 from functools import partial, cached_property
 from datetime import datetime, timedelta, timezone
-from tkinter import Tk, ttk, StringVar, DoubleVar, IntVar, messagebox
+from tkinter import Tk, ttk, StringVar, DoubleVar, IntVar, messagebox, filedialog
 from typing import Any, Union, Tuple, TypedDict, NoReturn, Generic, TYPE_CHECKING
 
 import pystray
@@ -1166,8 +1167,23 @@ class TrayIcon:
         def bridge(func):
             return lambda: loop.call_soon_threadsafe(func)
 
+        twitch = self._manager._twitch
         menu = pystray.Menu(
             pystray.MenuItem(_("gui", "tray", "show"), bridge(self.restore), default=True),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem(
+                _("gui", "tray", "pause"),
+                bridge(twitch.toggle_pause),
+                checked=lambda _: twitch.is_paused,
+            ),
+            pystray.MenuItem(
+                _("gui", "tray", "skip_channel"),
+                bridge(twitch.skip_watching_channel),
+            ),
+            pystray.MenuItem(
+                _("gui", "tray", "next_game"),
+                bridge(twitch.skip_watching_game),
+            ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(_("gui", "tray", "quit"), bridge(self.quit)),
         )
@@ -2280,9 +2296,23 @@ class SettingsPanel:
             exclude_frame, text="❌", command=self.exclude_delete, width=3, style="Large.TButton"
         ).grid(column=0, row=2, columnspan=2, sticky="nsew")
 
+        # Export / import priority + exclude lists
+        lists_frame = ttk.Frame(center_frame)
+        lists_frame.grid(column=0, row=2, columnspan=3, pady=(4, 0))
+        ttk.Button(
+            lists_frame,
+            text=_("gui", "settings", "export_lists"),
+            command=self.export_lists,
+        ).grid(column=0, row=0, padx=(0, 6))
+        ttk.Button(
+            lists_frame,
+            text=_("gui", "settings", "import_lists"),
+            command=self.import_lists,
+        ).grid(column=1, row=0)
+
         # Reload button
         reload_frame = ttk.Frame(center_frame)
-        reload_frame.grid(column=0, row=2, columnspan=3, pady=4)
+        reload_frame.grid(column=0, row=3, columnspan=3, pady=4)
         ttk.Label(reload_frame, text=_("gui", "settings", "reload_text")).grid(column=0, row=0)
         ttk.Button(
             reload_frame,
@@ -2465,6 +2495,97 @@ class SettingsPanel:
 
     def set_games(self, games: set[Game]) -> None:
         self._game_names.update(game.name for game in games)
+
+    def export_lists(self) -> None:
+        """Save priority + exclude lists to a JSON file for backup / another PC."""
+        path = filedialog.asksaveasfilename(
+            parent=self._manager._root,
+            title=_("gui", "settings", "export_lists"),
+            defaultextension=".json",
+            filetypes=[("JSON", "*.json"), ("All files", "*.*")],
+            initialfile="tdm-lists.json",
+        )
+        if not path:
+            return
+        payload = {
+            "priority": list(self._settings.priority),
+            "exclude": sorted(self._settings.exclude),
+        }
+        try:
+            Path(path).write_text(
+                json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            messagebox.showerror(
+                _("gui", "settings", "export_lists"),
+                str(exc),
+                parent=self._manager._root,
+            )
+            return
+        messagebox.showinfo(
+            _("gui", "settings", "export_lists"),
+            _("gui", "settings", "export_done").format(path=path),
+            parent=self._manager._root,
+        )
+
+    def import_lists(self) -> None:
+        """Load priority + exclude lists from a JSON file exported earlier."""
+        path = filedialog.askopenfilename(
+            parent=self._manager._root,
+            title=_("gui", "settings", "import_lists"),
+            filetypes=[("JSON", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            messagebox.showerror(
+                _("gui", "settings", "import_lists"),
+                str(exc),
+                parent=self._manager._root,
+            )
+            return
+        if not isinstance(data, dict):
+            messagebox.showerror(
+                _("gui", "settings", "import_lists"),
+                _("gui", "settings", "import_invalid"),
+                parent=self._manager._root,
+            )
+            return
+        priority_raw = data.get("priority", [])
+        exclude_raw = data.get("exclude", [])
+        if not isinstance(priority_raw, list) or not isinstance(exclude_raw, (list, set)):
+            messagebox.showerror(
+                _("gui", "settings", "import_lists"),
+                _("gui", "settings", "import_invalid"),
+                parent=self._manager._root,
+            )
+            return
+        priority = [str(name).strip() for name in priority_raw if str(name).strip()]
+        exclude = {str(name).strip() for name in exclude_raw if str(name).strip()}
+        # Keep lists mutually exclusive — priority wins on conflict
+        exclude.difference_update(priority)
+        self._settings.priority = priority
+        self._settings.exclude = exclude
+        self._settings.alter()
+        self._priority_list.delete(0, "end")
+        if priority:
+            self._priority_list.insert("end", *priority)
+        self._exclude_list.delete(0, "end")
+        if exclude:
+            self._exclude_list.insert("end", *sorted(exclude))
+        self.update_priority_choices()
+        self.update_excluded_choices()
+        self._refresh_inventory()
+        messagebox.showinfo(
+            _("gui", "settings", "import_lists"),
+            _("gui", "settings", "import_done").format(
+                priority=len(priority), exclude=len(exclude)
+            ),
+            parent=self._manager._root,
+        )
 
     def priority_add(self) -> None:
         game_name: str = self._priority_entry.get()

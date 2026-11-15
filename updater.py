@@ -31,6 +31,7 @@ class UpdateInfo:
     remote_sha: str
     download_url: str
     asset_name: str
+    release_notes: str = ""
 
     @property
     def is_newer(self) -> bool:
@@ -40,6 +41,27 @@ class UpdateInfo:
         remote = self.remote_sha.lower()
         local_l = local.lower()
         return not (remote.startswith(local_l) or local_l.startswith(remote))
+
+
+def format_release_notes(body: str, *, max_chars: int = 900) -> str:
+    """Strip CI boilerplate from a GitHub release body and truncate for dialogs."""
+    lines: list[str] = []
+    for line in (body or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            if lines and lines[-1] != "":
+                lines.append("")
+            continue
+        lower = stripped.lower()
+        if lower.startswith("reference commit:"):
+            continue
+        if lower.startswith("**full changelog"):
+            continue
+        lines.append(stripped)
+    text = "\n".join(lines).strip()
+    if len(text) > max_chars:
+        text = text[: max_chars - 1].rstrip() + "…"
+    return text
 
 
 def local_commit_sha() -> str | None:
@@ -93,6 +115,7 @@ async def fetch_update_info(session: aiohttp.ClientSession) -> UpdateInfo | None
         remote_sha=remote_sha,
         download_url=download_url,
         asset_name=asset.get("name") or WINDOWS_ASSET_NAME,
+        release_notes=format_release_notes(body),
     )
 
 
@@ -107,10 +130,13 @@ async def download_update(
 
 
 UPDATE_SUCCESS_PATH = WORKING_DIR / ".update_success"
+UPDATE_NOTES_PATH = WORKING_DIR / ".update_notes"
 UPDATE_LOG_PATH = WORKING_DIR / "_update_apply.log"
 
 
-def apply_windows_update(zip_path: Path, *, remote_sha: str = "") -> None:
+def apply_windows_update(
+    zip_path: Path, *, remote_sha: str = "", release_notes: str = ""
+) -> None:
     """
     Extract the Windows release zip and schedule a replace-after-exit script.
 
@@ -210,6 +236,11 @@ timeout /t 1 /nobreak >nul
 del /f /q "%~f0" >nul 2>&1
 """
     bat_path.write_text(bat_contents, encoding="utf-8")
+    # Notes are written by Python (UTF-8); the bat only writes the success SHA.
+    if release_notes.strip():
+        UPDATE_NOTES_PATH.write_text(release_notes.strip(), encoding="utf-8")
+    else:
+        UPDATE_NOTES_PATH.unlink(missing_ok=True)
     logger.info("Update script written: %s (waiting for pid %s)", bat_path, pid)
 
     # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
@@ -225,10 +256,10 @@ del /f /q "%~f0" >nul 2>&1
     )
 
 
-def consume_update_success() -> str | None:
+def consume_update_success() -> tuple[str, str] | None:
     """
-    If the previous launch finished applying an update, return its SHA and clear
-    the marker. Otherwise return None.
+    If the previous launch finished applying an update, return ``(sha, notes)``
+    and clear the markers. Otherwise return None.
     """
     if not UPDATE_SUCCESS_PATH.exists():
         return None
@@ -236,11 +267,21 @@ def consume_update_success() -> str | None:
         sha = UPDATE_SUCCESS_PATH.read_text(encoding="utf-8").strip() or "unknown"
     except OSError:
         sha = "unknown"
+    notes = ""
+    try:
+        if UPDATE_NOTES_PATH.exists():
+            notes = UPDATE_NOTES_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        notes = ""
     try:
         UPDATE_SUCCESS_PATH.unlink(missing_ok=True)
     except OSError:
         pass
-    return sha
+    try:
+        UPDATE_NOTES_PATH.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return sha, notes
 
 
 def can_auto_apply() -> bool:

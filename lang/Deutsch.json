@@ -7,7 +7,12 @@
         "goes_offline": "{channel} ist OFFLINE gegangen, wechseln...",
         "claimed_drop": "Drop abgeholt: {drop}",
         "no_channel": "Keine teilnehmenden Kanäle online. Warten auf Kanäle...",
-        "no_campaign": "Keine aktiven Kampagnen verfügbar. Warten auf neue Kampagne..."
+        "no_campaign": "Keine aktiven Kampagnen verfügbar. Warten auf neue Kampagne...",
+        "paused": "Mining pausiert. Über das Tray-Menü fortsetzen.",
+        "resumed": "Mining fortgesetzt.",
+        "skip_nothing": "Nichts zu überspringen — gerade kein Kanal aktiv.",
+        "skipped_channel": "Kanal für diese Sitzung übersprungen: {channel}",
+        "skipped_game": "Spiel zurückgestellt, bis andere Spiele fertig sind: {game}"
     },
     "login": {
         "unexpected_content": "Unerwarteter Inhaltstyp zurückgegeben, normalerweise aufgrund einer Weiterleitung.\nIst ein Login für den Internetzugang erforderlich?",
@@ -41,7 +46,8 @@
             "switching": "Wechsel des Kanals...",
             "fetching_inventory": "Lade Inventar...",
             "fetching_campaigns": "Lade Kampagnen...",
-            "adding_campaigns": "Kampagnen dem Inventar hinzufügen... {counter}"
+            "adding_campaigns": "Kampagnen dem Inventar hinzufügen... {counter}",
+            "paused": "Pausiert"
         },
         "tabs": {
             "main": "Hauptseite",
@@ -53,6 +59,9 @@
             "notification_title": "Drop abgeholt",
             "minimize": "Minimiere ins System Tray",
             "show": "Anzeigen",
+            "pause": "Mining pausieren",
+            "skip_channel": "Kanal überspringen",
+            "next_game": "Nächstes Spiel",
             "quit": "Beenden"
         },
         "login": {
@@ -140,6 +149,11 @@
             "game_name": "Spiel",
             "priority": "Priorität",
             "exclude": "Ausschließen",
+            "export_lists": "Listen exportieren…",
+            "import_lists": "Listen importieren…",
+            "export_done": "Prioritäts- und Ausschlussliste gespeichert unter:\n{path}",
+            "import_done": "{priority} Prioritäts- und {exclude} Ausschluss-Spiel(e) importiert.",
+            "import_invalid": "Ungültige Datei. Erwartet wird JSON mit priority und exclude.",
             "reload": "Neu laden",
             "reload_text": "Die meisten Änderungen erfordern ein neu laden, um sofort wirksam zu werden: "
         },

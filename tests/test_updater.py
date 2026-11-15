@@ -1,6 +1,20 @@
 from __future__ import annotations
 
-from updater import UpdateInfo, local_commit_sha
+from updater import UpdateInfo, format_release_notes, local_commit_sha
+
+
+def test_format_release_notes_strips_commit_and_truncates() -> None:
+    body = (
+        "Reference commit: abcdef1234567890\n\n"
+        "- Fix updater restart\n"
+        "- Add tray pause\n\n"
+        "**Full Changelog**: https://example.com\n"
+    )
+    notes = format_release_notes(body)
+    assert "Reference commit" not in notes
+    assert "Full Changelog" not in notes
+    assert "Fix updater restart" in notes
+    assert "Add tray pause" in notes
 
 
 def test_update_info_detects_newer_commit(monkeypatch) -> None:

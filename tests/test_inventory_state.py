@@ -129,6 +129,18 @@ def test_campaign_uses_sized_box_art() -> None:
     assert campaign.image_url.endswith("-108x144.jpg")
 
 
+def test_can_finish_false_when_remaining_exceeds_window() -> None:
+    # 60 required minutes, campaign ends in 10 minutes → cannot finish
+    campaign = make_campaign(FakeTwitch(), end_offset=10 * 60)
+    assert campaign.can_finish() is False
+
+
+def test_can_finish_true_when_enough_time_remains() -> None:
+    # 60 required minutes, campaign ends in 2 hours → can finish
+    campaign = make_campaign(FakeTwitch(), end_offset=2 * 3600)
+    assert campaign.can_finish() is True
+
+
 @pytest.mark.parametrize(
     ("kwargs", "expected"),
     [

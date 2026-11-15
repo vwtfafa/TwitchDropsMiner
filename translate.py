@@ -31,6 +31,11 @@ class StatusMessages(TypedDict):
     update_applying: str
     update_failed: str
     update_success: str
+    paused: str
+    resumed: str
+    skip_nothing: str
+    skipped_channel: str
+    skipped_game: str
 
 
 class BrowserMessages(TypedDict):
@@ -79,6 +84,7 @@ class GUIStatus(TypedDict):
     fetching_inventory: str
     fetching_campaigns: str
     adding_campaigns: str
+    paused: str
 
 
 class GUITabs(TypedDict):
@@ -93,6 +99,9 @@ class GUITray(TypedDict):
     notification_title: str
     minimize: str
     show: str
+    pause: str
+    skip_channel: str
+    next_game: str
     quit: str
 
 
@@ -260,6 +269,11 @@ class GUISettings(TypedDict):
     game_name: str
     priority: str
     exclude: str
+    export_lists: str
+    import_lists: str
+    export_done: str
+    import_done: str
+    import_invalid: str
     reload: str
     reload_text: str
 
@@ -360,6 +374,11 @@ default_translation: Translation = {
         "update_applying": "Update downloaded. Restarting to apply…",
         "update_failed": "Update failed. Please download the release manually.",
         "update_success": "Update installed successfully (commit {sha}).",
+        "paused": "Mining paused. Resume from the tray menu when ready.",
+        "resumed": "Mining resumed.",
+        "skip_nothing": "Nothing to skip — not currently watching a channel.",
+        "skipped_channel": "Skipping channel for this session: {channel}",
+        "skipped_game": "Deferring game until other wanted games are done: {game}",
     },
     "login": {
         "unexpected_content": (
@@ -419,6 +438,7 @@ default_translation: Translation = {
             "fetching_inventory": "Fetching inventory...",
             "fetching_campaigns": "Fetching campaigns...",
             "adding_campaigns": "Adding campaigns to inventory... {counter}",
+            "paused": "Paused",
         },
         "tabs": {
             "main": "Main",
@@ -431,6 +451,9 @@ default_translation: Translation = {
             "notification_title": "Mined Drop",
             "minimize": "Minimize to Tray",
             "show": "Show",
+            "pause": "Pause mining",
+            "skip_channel": "Skip channel",
+            "next_game": "Next game",
             "quit": "Quit",
         },
         "login": {
@@ -570,6 +593,11 @@ default_translation: Translation = {
             "game_name": "Game name",
             "priority": "Priority",
             "exclude": "Exclude",
+            "export_lists": "Export lists…",
+            "import_lists": "Import lists…",
+            "export_done": "Saved priority and exclude lists to:\n{path}",
+            "import_done": "Imported {priority} priority and {exclude} exclude game(s).",
+            "import_invalid": "Invalid list file. Expected JSON with priority and exclude.",
             "reload": "Reload",
             "reload_text": (
                 "Reload fetches new campaigns; priority and exclude changes "

@@ -574,6 +574,10 @@ class Twitch:
         self._mnt_triggers: deque[datetime] = deque()
         # triggers at which a drop stops being completable in time, these re-pick the games
         self._deadline_triggers: set[datetime] = set()
+        # Tray controls: pause mining / skip channel / defer current game for this session
+        self._mining_paused: bool = False
+        self._skipped_channel_ids: set[int] = set()
+        self._deferred_game_names: set[str] = set()
         # NOTE: GQL is pretty volatile and breaks everything if one runs into their rate limit.
         # Do not modify the default, safe values.
         self._qgl_limiter = RateLimiter(capacity=5, window=1)
@@ -667,6 +671,9 @@ class Twitch:
         self.wanted_games.clear()
         self._mnt_triggers.clear()
         self._deadline_triggers.clear()
+        self._mining_paused = False
+        self._skipped_channel_ids.clear()
+        self._deferred_game_names.clear()
         self._next_reload_at = None
         # wait at least half a second + whatever it takes to complete the closing
         # this allows aiohttp to safely close the session
@@ -974,7 +981,9 @@ class Twitch:
         try:
             await download_update(session, info, zip_path)
             self.print(_("status", "update_applying"))
-            apply_windows_update(zip_path, remote_sha=info.remote_sha)
+            apply_windows_update(
+                zip_path, remote_sha=info.remote_sha, release_notes=info.release_notes
+            )
             # Soft-close first, then hard-exit so Windows releases the EXE lock.
             # The detached .bat waits for our PID before copying (see updater.py).
             self.gui.close()
@@ -997,12 +1006,17 @@ class Twitch:
         asyncio.create_task(self._check_update(interactive=True))
 
     def _notify_update_success_if_needed(self) -> None:
-        sha = consume_update_success()
-        if not sha:
+        result = consume_update_success()
+        if not result:
             return
-        msg = _("status", "update_success").format(sha=sha[:7] if sha != "unknown" else sha)
-        self.print(msg)
+        sha, notes = result
+        short = sha[:7] if sha != "unknown" else sha
+        msg = _("status", "update_success").format(sha=short)
+        if notes:
+            msg = f"{msg}\n\n{notes}"
+        self.print(_("status", "update_success").format(sha=short))
         self.gui.show_info(_("gui", "help", "update", "success_title"), msg)
+        self.gui.tray.notify(msg.split("\n", 1)[0], _("gui", "help", "update", "success_title"))
 
     async def _run(self):
         """
@@ -1126,6 +1140,16 @@ class Twitch:
                             self.wanted_games.append(game)
                     if self.wanted_games:
                         break
+                # Session "Next game": keep deferred games, but after everything else
+                if self._deferred_game_names and len(self.wanted_games) > 1:
+                    preferred = [
+                        g for g in self.wanted_games if g.name not in self._deferred_game_names
+                    ]
+                    deferred = [
+                        g for g in self.wanted_games if g.name in self._deferred_game_names
+                    ]
+                    if preferred:
+                        self.wanted_games = preferred + deferred
                 # After the priority list is exhausted, optionally keep mining
                 # badge/emote-only campaigns even when Priority-only is enabled.
                 if self.settings.fallback_badges_emotes:
@@ -1318,6 +1342,12 @@ class Twitch:
                 if self.settings.dump:
                     self.gui.close()
                     continue
+                if self._mining_paused:
+                    self.stop_watching()
+                    self.gui.status.update(_("gui", "status", "paused"))
+                    self.gui.set_state_hint(_("status", "paused"))
+                    self._state_change.clear()
+                    continue
                 # Change into the selected channel, stay in the watching channel,
                 # or select a new channel that meets the required conditions
                 new_watching = None
@@ -1481,6 +1511,8 @@ class Twitch:
         # exit early if stream is offline
         if not channel.online:
             return False
+        if self._mining_paused or channel.id in self._skipped_channel_ids:
+            return False
         for campaign in self.inventory:
             if (
                 campaign.can_earn(channel)  # let the campaign do the "special games" check
@@ -1547,6 +1579,50 @@ class Twitch:
     def restart_watching(self):
         self.gui.progress.stop_timer()
         self._watching_restart.set()
+
+    @property
+    def is_paused(self) -> bool:
+        return self._mining_paused
+
+    def toggle_pause(self) -> None:
+        """Tray/GUI: pause or resume mining without quitting."""
+        self._mining_paused = not self._mining_paused
+        if self._mining_paused:
+            self.stop_watching()
+            self.print(_("status", "paused"))
+            self.gui.status.update(_("gui", "status", "paused"))
+            self.gui.set_state_hint(_("status", "paused"))
+            self.gui.tray.change_icon("idle")
+            self.request_state(State.CHANNEL_SWITCH)
+        else:
+            self.print(_("status", "resumed"))
+            self.gui.set_state_hint("")
+            self.request_state(State.CHANNEL_SWITCH)
+
+    def skip_watching_channel(self) -> None:
+        """Tray: skip the current channel for this session."""
+        channel = self.watching_channel.get_with_default(None)
+        if channel is None:
+            self.print(_("status", "skip_nothing"))
+            return
+        self._skipped_channel_ids.add(channel.id)
+        self.print(_("status", "skipped_channel").format(channel=channel.name))
+        self.stop_watching()
+        self.request_state(State.CHANNEL_SWITCH)
+
+    def skip_watching_game(self) -> None:
+        """Tray: defer the current game until other wanted games are done."""
+        channel = self.watching_channel.get_with_default(None)
+        if channel is None or channel.game is None:
+            self.print(_("status", "skip_nothing"))
+            return
+        game = channel.game
+        self._deferred_game_names.add(game.name)
+        if game in self.wanted_games and len(self.wanted_games) > 1:
+            self.wanted_games = [g for g in self.wanted_games if g != game] + [game]
+        self.print(_("status", "skipped_game").format(game=game.name))
+        self.stop_watching()
+        self.request_state(State.CHANNEL_SWITCH)
 
     @task_wrapper
     async def process_stream_state(self, channel_id: int, message: JsonType):
@@ -2034,6 +2110,9 @@ class Twitch:
         self._campaigns.clear()
         self._mnt_triggers.clear()
         self._deadline_triggers.clear()
+        # Fresh inventory: clear session skip/defer so campaigns can be retried
+        self._skipped_channel_ids.clear()
+        self._deferred_game_names.clear()
         switch_triggers: set[datetime] = set()
         next_hour = datetime.now(timezone.utc) + timedelta(hours=1)
         # add the campaigns to the internal inventory
