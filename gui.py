@@ -3325,6 +3325,14 @@ class GUIManager:
         self.grab_attention(sound=False)
         return bool(messagebox.askyesno(title, message, parent=self._root))
 
+    def show_info(self, title: str, message: str) -> None:
+        self.grab_attention(sound=False)
+        messagebox.showinfo(title, message, parent=self._root)
+
+    def show_error(self, title: str, message: str) -> None:
+        self.grab_attention(sound=True)
+        messagebox.showerror(title, message, parent=self._root)
+
     def _set_title_bar_color(self, color: int) -> None:
         """
         Set the Windows title bar color to match the theme.

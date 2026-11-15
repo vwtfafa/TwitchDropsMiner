@@ -279,6 +279,8 @@ class GUIHelpUpdate(TypedDict):
     text: str
     title: str
     confirm: str
+    up_to_date_title: str
+    failed_title: str
 
 
 class GUIHelp(TypedDict):
@@ -638,6 +640,8 @@ default_translation: Translation = {
                 "button": "Check for updates",
                 "text": "Download and install the latest Windows build:",
                 "title": "Update available",
+                "up_to_date_title": "No updates",
+                "failed_title": "Update check failed",
                 "confirm": (
                     "A newer build is available "
                     "(published {published}, commit {sha}).\n\n"

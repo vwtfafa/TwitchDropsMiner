@@ -920,12 +920,16 @@ class Twitch:
         session = await self.get_session()
         info = await fetch_update_info(session)
         if info is None:
+            msg = _("status", "update_check_failed")
+            self.print(msg)
             if interactive:
-                self.print(_("status", "update_check_failed"))
+                self.gui.show_error(_("gui", "help", "update", "failed_title"), msg)
             return
         if not info.is_newer:
+            msg = _("status", "update_up_to_date")
+            self.print(msg)
             if interactive:
-                self.print(_("status", "update_up_to_date"))
+                self.gui.show_info(_("gui", "help", "update", "up_to_date_title"), msg)
             return
 
         self.print(
@@ -935,8 +939,10 @@ class Twitch:
             )
         )
         if not can_auto_apply():
+            msg = _("status", "update_manual")
+            self.print(msg)
             if interactive:
-                self.print(_("status", "update_manual"))
+                self.gui.show_info(_("gui", "help", "update", "title"), msg)
             return
 
         # Startup: only auto-install when the setting is on. Manual button always asks.
