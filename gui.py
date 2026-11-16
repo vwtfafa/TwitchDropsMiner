@@ -37,7 +37,7 @@ if sys.platform == "darwin":
 
 from translate import _
 from cache import ImageCache
-from inventory import CAMPAIGN_IMAGE_SIZE, CampaignStatus, DropStatus
+from inventory import CAMPAIGN_IMAGE_SIZE, CampaignStatus, DropStatus, campaign_has_open_drop
 from exceptions import MinerException, ExitRequest
 from utils import resource_path, set_root_icon, webopen, task_wrapper, Game, _T
 from constants import (
@@ -74,6 +74,22 @@ EMOJI_PATTERN = re.compile(
     "[\U0001F000-\U0001FAFF\u2300-\u23FF\u2600-\u27BF\u2B00-\u2BFF\uFE0F\u200D]+"
 )
 EMOJI_WIDTH = 18  # approximate rendered width of one emoji, in pixels
+_GEOMETRY = re.compile(r"^(\d+)x(\d+)\+(-?\d+)\+(-?\d+)$")
+
+
+def clamp_window_geometry(
+    raw: str, screen_w: int, screen_h: int, *, min_w: int = 200, min_h: int = 200
+) -> str | None:
+    """Return a geometry string that still has a corner on this screen."""
+    match = _GEOMETRY.fullmatch(raw.strip())
+    if match is None or screen_w <= 0 or screen_h <= 0:
+        return None
+    width, height, x, y = (int(part) for part in match.groups())
+    if width < min_w or height < min_h:
+        return None
+    if x > screen_w - 50 or y > screen_h - 50 or x + width < 50 or y + height < 50:
+        return None
+    return f"{width}x{height}+{x}+{y}"
 
 
 ######################
@@ -771,15 +787,29 @@ class CampaignProgress:
             campaign_minutes = 0
         drop_vars: _DropVars = self._vars["drop"]
         campaign_vars: _CampaignVars = self._vars["campaign"]
-        dseconds = self._seconds % 60
-        hours, minutes = self._divmod(drop_minutes)
         drop_vars["remaining"].set(
-            _("gui", "progress", "remaining").format(time=f"{hours:>2}:{minutes:02}:{dseconds:02}")
+            self._remaining_text(drop_minutes, with_finish=drop is not None)
         )
-        hours, minutes = self._divmod(campaign_minutes)
         campaign_vars["remaining"].set(
-            _("gui", "progress", "remaining").format(time=f"{hours:>2}:{minutes:02}:{dseconds:02}")
+            self._remaining_text(campaign_minutes, with_finish=drop is not None)
         )
+
+    def _remaining_text(self, minutes: int, *, with_finish: bool) -> str:
+        hours, mins = self._divmod(minutes)
+        seconds = self._seconds % 60
+        text = _("gui", "progress", "remaining").format(
+            time=f"{hours:>2}:{mins:02}:{seconds:02}"
+        )
+        if not with_finish:
+            return text
+        finish = datetime.now().astimezone() + timedelta(
+            hours=hours, minutes=mins, seconds=seconds
+        )
+        if hours >= 24:
+            clock = finish.strftime("%d.%m. %H:%M")
+        else:
+            clock = finish.strftime("%H:%M")
+        return _("gui", "progress", "done_at").format(remaining=text, time=clock)
 
     async def _timer_loop(self):
         self._update_time(60)
@@ -897,6 +927,7 @@ class ConsoleOutput:
 class _Buttons(TypedDict):
     frame: ttk.Frame
     switch: ttk.Button
+    exclude: ttk.Button
 
 
 class ChannelList:
@@ -919,9 +950,16 @@ class ChannelList:
                 state="disabled",
                 command=manager._twitch.state_change(State.CHANNEL_SWITCH),
             ),
+            "exclude": ttk.Button(
+                buttons_frame,
+                text=_("gui", "channels", "exclude"),
+                state="disabled",
+                command=self._exclude_selected,
+            ),
         }
         buttons_frame.grid(column=0, row=0, columnspan=2)
         self._buttons["switch"].grid(column=0, row=0)
+        self._buttons["exclude"].grid(column=1, row=0, padx=(4, 0))
         scroll = ttk.Scrollbar(frame, orient="vertical")
         self._table = table = ttk.Treeview(
             frame,
@@ -1008,10 +1046,14 @@ class ChannelList:
 
     def _selected(self, event):
         selection = self._table.selection()
-        if selection:
-            self._buttons["switch"].config(state="normal")
-        else:
-            self._buttons["switch"].config(state="disabled")
+        state = "normal" if selection else "disabled"
+        self._buttons["switch"].config(state=state)
+        self._buttons["exclude"].config(state=state)
+
+    def _exclude_selected(self) -> None:
+        channel = self.get_selection()
+        if channel is not None:
+            self._manager._twitch.exclude_channel(channel)
 
     def _measure(self, text: str) -> int:
         # we need this because columns have 9-10 pixels of padding that cuts text off
@@ -1283,6 +1325,7 @@ class TrayIcon:
     def minimize(self):
         if sys.platform == "darwin":
             return
+        self._manager._remember_window()
         if self.icon is None:
             self._start()
         else:
@@ -1353,6 +1396,12 @@ class Notebook:
     def current_tab(self) -> int:
         return self._nb.index("current")
 
+    def tab_count(self) -> int:
+        return self._nb.index("end")
+
+    def select_index(self, index: int) -> None:
+        self._nb.select(index)
+
     def index(self, widget: ttk.Widget) -> int:
         return self._nb.index(widget)
 
@@ -1388,7 +1437,15 @@ class InventoryOverview:
             "expired": IntVar(master, 0),
             "excluded": IntVar(master, 0),
             "finished": IntVar(master, 0),
+            "claimable": IntVar(master, 0),
         }
+        self._sort_labels = {
+            "": _("gui", "inventory", "filter", "sort_default"),
+            "ends": _("gui", "inventory", "filter", "sort_ends"),
+            "progress": _("gui", "inventory", "filter", "sort_progress"),
+        }
+        self._sort_by_label = {label: key for key, label in self._sort_labels.items()}
+        self._sort_var = StringVar(master, self._sort_labels[""])
         manager.tabs.add_view_event(self._on_tab_switched)
         # Filtering options
         filter_frame = ttk.LabelFrame(
@@ -1443,6 +1500,26 @@ class InventoryOverview:
         ttk.Button(
             filter_frame, text=_("gui", "inventory", "filter", "refresh"), command=self.refresh
         ).grid(column=(icolumn := icolumn + 1), row=0)
+        sort_row = ttk.Frame(filter_frame)
+        sort_row.grid(column=0, row=2, columnspan=icolumn + 1, sticky="w", pady=(2, 0))
+        ttk.Checkbutton(
+            sort_row, variable=self._filters["claimable"], command=self.refresh
+        ).grid(column=0, row=0)
+        ttk.Label(
+            sort_row,
+            text=_("gui", "inventory", "filter", "claimable"),
+            padding=(0, 0, LABEL_SPACING, 0),
+        ).grid(column=1, row=0)
+        ttk.Label(sort_row, text=_("gui", "inventory", "filter", "sort")).grid(column=2, row=0)
+        sort_box = ttk.Combobox(
+            sort_row,
+            state="readonly",
+            width=22,
+            textvariable=self._sort_var,
+            values=list(self._sort_labels.values()),
+        )
+        sort_box.grid(column=3, row=0, padx=(4, 0))
+        sort_box.bind("<<ComboboxSelected>>", self._on_sort_mode)
         # Onboarding: the default Priority-only mode with an empty list is the
         # state that used to look stuck. Offer a direct route to Settings.
         self._setup_frame = ttk.Frame(filter_frame)
@@ -1540,8 +1617,26 @@ class InventoryOverview:
         else:
             self._sort_column = column
             self._sort_reverse = column in self.SORT_DEFAULT_REVERSE
+        self._sync_sort_var()
         self._update_headings()
         self.refresh()
+
+    def _on_sort_mode(self, event: tk.Event[ttk.Combobox] | None = None) -> None:
+        column = self._sort_by_label.get(self._sort_var.get(), "")
+        if not column:
+            self._sort_column = None
+            self._sort_reverse = False
+        else:
+            self._sort_column = column
+            self._sort_reverse = column in self.SORT_DEFAULT_REVERSE
+        self._update_headings()
+        self.refresh()
+
+    def _sync_sort_var(self) -> None:
+        column = self._sort_column or ""
+        if column not in self._sort_labels:
+            column = ""
+        self._sort_var.set(self._sort_labels[column])
 
     def _update_headings(self) -> None:
         for cid, key, _width, anchor, _stretch in self.COLUMNS:
@@ -1580,6 +1675,7 @@ class InventoryOverview:
         excluded = bool(self._filters["excluded"].get())
         upcoming = bool(self._filters["upcoming"].get())
         finished = bool(self._filters["finished"].get())
+        claimable = bool(self._filters["claimable"].get())
         # In priority-only mode with an empty priority list, don't hide the whole
         # inventory: the user needs to see campaigns to decide what to add.
         priority_filter = (
@@ -1602,6 +1698,7 @@ class InventoryOverview:
                 )
             )
             and (finished or not campaign.finished)
+            and (not claimable or campaign_has_open_drop(campaign))
         )
 
     def _row_values(self, campaign: DropsCampaign) -> tuple[str, str, str, str, str, str]:
@@ -2371,6 +2468,40 @@ class SettingsPanel:
         ttk.Button(
             exclude_frame, text="❌", command=self.exclude_delete, width=3, style="Large.TButton"
         ).grid(column=0, row=2, columnspan=2, sticky="nsew")
+        ttk.Label(exclude_frame, text=_("gui", "settings", "channel_exclude")).grid(
+            column=0, row=3, columnspan=2, sticky="w", pady=(8, 0)
+        )
+        self._channel_entry = PlaceholderEntry(
+            exclude_frame, placeholder=_("gui", "settings", "channel_login"), width=26
+        )
+        self._channel_entry.grid(column=0, row=4, sticky="ew")
+        self._channel_entry.bind("<Return>", lambda event: self.channel_exclude_add())
+        ttk.Button(
+            exclude_frame,
+            text="➕",
+            command=self.channel_exclude_add,
+            width=3,
+            style="Large.TButton",
+        ).grid(column=1, row=4)
+        self._channel_list = PaddedListbox(
+            exclude_frame,
+            height=5,
+            padding=(1, 0),
+            activestyle="none",
+            selectmode="single",
+            highlightthickness=0,
+            exportselection=False,
+        )
+        self._channel_list.grid(column=0, row=5, columnspan=2, sticky="nsew")
+        exclude_frame.rowconfigure(5, weight=1)
+        self._channel_list.insert("end", *sorted(self._settings.channel_exclude))
+        ttk.Button(
+            exclude_frame,
+            text="❌",
+            command=self.channel_exclude_delete,
+            width=3,
+            style="Large.TButton",
+        ).grid(column=0, row=6, columnspan=2, sticky="nsew")
 
         # Export / import priority + exclude lists
         lists_frame = ttk.Frame(center_frame)
@@ -2410,6 +2541,7 @@ class SettingsPanel:
     def clear_selection(self) -> None:
         self._priority_list.selection_clear(0, "end")
         self._exclude_list.selection_clear(0, "end")
+        self._channel_list.selection_clear(0, "end")
 
     def _refresh_inventory(self) -> None:
         """
@@ -2432,6 +2564,7 @@ class SettingsPanel:
             self._exclude_list.insert("end", *sorted(self._settings.exclude))
         self.update_priority_choices()
         self.update_excluded_choices()
+        self.refresh_channel_exclude()
 
     def update_dark_mode(self) -> None:
         self._settings.dark_mode = bool(self._vars["dark_mode"].get())
@@ -2586,6 +2719,7 @@ class SettingsPanel:
         payload = {
             "priority": list(self._settings.priority),
             "exclude": sorted(self._settings.exclude),
+            "channel_exclude": sorted(self._settings.channel_exclude),
         }
         try:
             Path(path).write_text(
@@ -2645,6 +2779,11 @@ class SettingsPanel:
         exclude.difference_update(priority)
         self._settings.priority = priority
         self._settings.exclude = exclude
+        channel_raw = data.get("channel_exclude")
+        if isinstance(channel_raw, (list, set)):
+            self._settings.channel_exclude = {
+                str(name).strip().casefold() for name in channel_raw if str(name).strip()
+            }
         self._settings.alter()
         self._priority_list.delete(0, "end")
         if priority:
@@ -2654,6 +2793,7 @@ class SettingsPanel:
             self._exclude_list.insert("end", *sorted(exclude))
         self.update_priority_choices()
         self.update_excluded_choices()
+        self.refresh_channel_exclude()
         self._refresh_inventory()
         messagebox.showinfo(
             _("gui", "settings", "import_lists"),
@@ -2800,6 +2940,31 @@ class SettingsPanel:
             self._exclude_list.see(existing_idx)
         if changed:
             self._refresh_inventory()
+
+    def refresh_channel_exclude(self) -> None:
+        self._channel_list.delete(0, "end")
+        if self._settings.channel_exclude:
+            self._channel_list.insert("end", *sorted(self._settings.channel_exclude))
+
+    def channel_exclude_add(self) -> None:
+        login = self._channel_entry.get().strip().casefold()
+        self._channel_entry.clear()
+        if not login or login in self._settings.channel_exclude:
+            return
+        self._settings.channel_exclude.add(login)
+        self._settings.alter()
+        self.refresh_channel_exclude()
+        self._manager._twitch.request_state(State.CHANNELS_CLEANUP)
+
+    def channel_exclude_delete(self) -> None:
+        selection = self._channel_list.curselection()
+        if not selection:
+            return
+        login = self._channel_list.get(selection[0])
+        self._settings.channel_exclude.discard(login)
+        self._settings.alter()
+        self.refresh_channel_exclude()
+        self._manager._twitch.request_state(State.CHANNELS_CLEANUP)
 
     def exclude_delete(self) -> None:
         selection: tuple[int, ...] = self._exclude_list.curselection()
@@ -3256,9 +3421,11 @@ class GUIManager:
         self.help = HelpTab(self, help_frame)
         self.tabs.add_tab(help_frame, name=_("gui", "tabs", "help"))
         self.tabs.add_view_event(self._on_tab_switched)
+        self._geom_after: str | None = None
         # clamp minimum window size (update geometry first)
         root.update_idletasks()
         root.minsize(width=root.winfo_reqwidth(), height=root.winfo_reqheight())
+        self._restore_window()
         # register logging handler
         self._handler = _TKOutputHandler(self)
         self._handler.setFormatter(OUTPUT_FORMATTER)
@@ -3271,8 +3438,8 @@ class GUIManager:
             # NOTE: this root.update() is required for the below to work - don't remove
             root.update()
             self._message_map = {
-                # window close request
-                win32con.WM_CLOSE: self.close,
+                # window close request — hide to tray instead of quitting
+                win32con.WM_CLOSE: self._on_window_close,
                 # shutdown request
                 win32con.WM_QUERYENDSESSION: self.close,
             }
@@ -3288,7 +3455,7 @@ class GUIManager:
             # ctypes.windll.user32.ShutdownBlockReasonDestroy(self._handle)
         else:
             # use old-style window closing protocol for non-windows platforms
-            root.protocol("WM_DELETE_WINDOW", self.close)
+            root.protocol("WM_DELETE_WINDOW", self._on_window_close)
             root.protocol("WM_DESTROY_WINDOW", self.close)
         # Save current theme and apply palette after widgets are created
         try:
@@ -3321,6 +3488,70 @@ class GUIManager:
     def _on_tab_switched(self, event: tk.Event[ttk.Notebook]) -> None:
         if self.tabs.current_tab() == self._settings_tab_index:
             self._ensure_settings()
+        self._remember_window()
+
+    def _restore_window(self) -> None:
+        settings = self._twitch.settings
+        geometry = clamp_window_geometry(
+            getattr(settings, "window_geometry", ""),
+            self._root.winfo_screenwidth(),
+            self._root.winfo_screenheight(),
+        )
+        if geometry:
+            self._root.geometry(geometry)
+        last_tab = getattr(settings, "last_tab", 0)
+        if isinstance(last_tab, int) and 0 <= last_tab < self.tabs.tab_count():
+            self.tabs.select_index(last_tab)
+        self._root.bind("<Configure>", self._schedule_window_save, add="+")
+
+    def _schedule_window_save(self, event: tk.Event[tk.Misc]) -> None:
+        if event.widget is not self._root:
+            return
+        if self._geom_after is not None:
+            self._root.after_cancel(self._geom_after)
+        self._geom_after = self._root.after(400, self._remember_window)
+
+    def _remember_window(self) -> None:
+        self._geom_after = None
+        settings = self._twitch.settings
+        try:
+            if self._root.winfo_viewable():
+                geometry = clamp_window_geometry(
+                    self._root.geometry(),
+                    self._root.winfo_screenwidth(),
+                    self._root.winfo_screenheight(),
+                )
+                if geometry and settings.window_geometry != geometry:
+                    settings.window_geometry = geometry
+            last_tab = self.tabs.current_tab()
+            if settings.last_tab != last_tab:
+                settings.last_tab = last_tab
+        except tk.TclError:
+            return
+        save = getattr(settings, "save", None)
+        if save is not None:
+            save()
+
+    def _on_window_close(self, *args: object) -> int:
+        """X hides the window while the tray can keep the miner running."""
+        if sys.platform == "darwin":
+            return self.close()
+        try:
+            self.tray.minimize()
+        except Exception:
+            logger.exception("Could not minimize to tray")
+            return self.close()
+        return 0
+
+    def play_claim_sound(self) -> None:
+        try:
+            if sys.platform == "win32":
+                import winsound
+                winsound.MessageBeep(winsound.MB_OK)
+            else:
+                self._root.bell()
+        except Exception:
+            logger.debug("Claim sound failed", exc_info=True)
 
     def _ensure_settings(self) -> SettingsPanel:
         """
@@ -3456,6 +3687,7 @@ class GUIManager:
         Requests the GUI application to close.
         The window itself will be closed in the closing sequence later.
         """
+        self._remember_window()
         self._close_requested.set()
         # notify client we're supposed to close
         self._twitch.close()
@@ -3918,6 +4150,9 @@ if __name__ == "__main__":
                 language="English",
                 autostart_tray=False,
                 exclude={"Lit Game"},
+                channel_exclude=set(),
+                window_geometry="",
+                last_tab=0,
                 tray_notifications=True,
                 browser_path="",
                 auto_update=True,

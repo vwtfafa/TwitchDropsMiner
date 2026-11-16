@@ -12,7 +12,8 @@
         "resumed": "Mining fortgesetzt.",
         "skip_nothing": "Nichts zu überspringen — gerade kein Kanal aktiv.",
         "skipped_channel": "Kanal für diese Sitzung übersprungen: {channel}",
-        "skipped_game": "Spiel zurückgestellt, bis andere Spiele fertig sind: {game}"
+        "skipped_game": "Spiel zurückgestellt, bis andere Spiele fertig sind: {game}",
+        "channel_excluded": "Kanal vom Mining ausgeschlossen: {channel}"
     },
     "login": {
         "unexpected_content": "Unerwarteter Inhaltstyp zurückgegeben, normalerweise aufgrund einer Weiterleitung.\nIst ein Login für den Internetzugang erforderlich?",
@@ -95,11 +96,13 @@
             "campaign": "Kampagne:",
             "remaining": "{time} verbleibend",
             "drop_progress": "Fortschritt:",
-            "campaign_progress": "Fortschritt:"
+            "campaign_progress": "Fortschritt:",
+            "done_at": "{remaining}  ·  fertig {time}"
         },
         "channels": {
             "name": "Kanäle",
             "switch": "Wechseln",
+            "exclude": "Ausschließen",
             "online": "ONLINE ✔",
             "pending": "OFFLINE ⏳",
             "offline": "OFFLINE ❌",
@@ -119,6 +122,11 @@
                 "expired": "Abgelaufen",
                 "excluded": "Ausgeschlossen",
                 "finished": "Abgeholt",
+                "claimable": "Noch holbar",
+                "sort": "Sortierung:",
+                "sort_default": "Standard",
+                "sort_ends": "Endet zuerst",
+                "sort_progress": "Fortschritt",
                 "refresh": "Aktualisieren"
             },
             "status": {
@@ -156,6 +164,8 @@
             "game_name": "Spiel",
             "priority": "Priorität",
             "exclude": "Ausschließen",
+            "channel_exclude": "Ausgeschlossene Kanäle",
+            "channel_login": "Kanal-Login",
             "export_lists": "Listen exportieren…",
             "import_lists": "Listen importieren…",
             "export_done": "Prioritäts- und Ausschlussliste gespeichert unter:\n{path}",

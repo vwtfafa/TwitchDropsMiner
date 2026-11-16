@@ -1277,6 +1277,12 @@ class Twitch:
                 )
                 ordered_channels.sort(key=lambda ch: ch.acl_based, reverse=True)
                 ordered_channels.sort(key=self.get_priority)
+                blocked = self.settings.channel_exclude
+                if blocked:
+                    ordered_channels = [
+                        channel for channel in ordered_channels
+                        if channel.login.casefold() not in blocked
+                    ]
                 # ensure that we won't end up with more channels than we can handle
                 # NOTE: we trim from the end because that's where the non-priority,
                 # offline (or online but low viewers) channels end up
@@ -1527,6 +1533,8 @@ class Twitch:
         # exit early if stream is offline
         if not channel.online:
             return False
+        if channel.login.casefold() in self.settings.channel_exclude:
+            return False
         if self._mining_paused or channel.id in self._skipped_channel_ids:
             return False
         for campaign in self.inventory:
@@ -1615,6 +1623,28 @@ class Twitch:
             self.gui.set_state_hint("")
             self.request_state(State.CHANNEL_SWITCH)
         self.gui.status.refresh_pause_button()
+
+    def exclude_channel(self, channel: Channel) -> None:
+        """Permanently skip one channel. Games stay minable on other channels."""
+        login = channel.login.casefold()
+        if login not in self.settings.channel_exclude:
+            self.settings.channel_exclude.add(login)
+            self.settings.alter()
+        tracked = self.channels.get(channel.id)
+        if tracked is not None:
+            self.websocket.remove_topics([
+                WebsocketTopic.as_str("Channel", "StreamState", channel.id),
+                WebsocketTopic.as_str("Channel", "StreamUpdate", channel.id),
+            ])
+            del self.channels[channel.id]
+            tracked.remove()
+        watching = self.watching_channel.get_with_default(None)
+        if watching is not None and watching.id == channel.id:
+            self.stop_watching()
+        self.print(_("status", "channel_excluded").format(channel=channel.name))
+        if self.gui.settings is not None:
+            self.gui.settings.refresh_channel_exclude()
+        self.request_state(State.CHANNEL_SWITCH)
 
     def skip_watching_channel(self) -> None:
         """Tray: skip the current channel for this session."""

@@ -256,6 +256,10 @@ class Channel:
         return self._login
 
     @property
+    def login(self) -> str:
+        return self._login
+
+    @property
     def url(self) -> URLType:
         return URLType(f"{self._twitch._client_type.CLIENT_URL}/{self._login}")
 

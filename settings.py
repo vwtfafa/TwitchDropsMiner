@@ -42,6 +42,9 @@ class SettingsFile(TypedDict):
     available_drops_check: bool
     fallback_badges_emotes: bool
     priority_mode: PriorityMode
+    channel_exclude: set[str]
+    window_geometry: str
+    last_tab: int
 
 
 default_settings: SettingsFile = {
@@ -58,6 +61,9 @@ default_settings: SettingsFile = {
     "available_drops_check": False,
     "fallback_badges_emotes": True,
     "priority_mode": PriorityMode.ENDING_SOONEST,
+    "channel_exclude": set(),
+    "window_geometry": "",
+    "last_tab": 0,
 }
 
 
@@ -84,6 +90,9 @@ class Settings:
     available_drops_check: bool
     fallback_badges_emotes: bool
     priority_mode: PriorityMode
+    channel_exclude: set[str]
+    window_geometry: str
+    last_tab: int
 
     PASSTHROUGH = ("_settings", "_args", "_altered")
 

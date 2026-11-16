@@ -36,6 +36,7 @@ class StatusMessages(TypedDict):
     skip_nothing: str
     skipped_channel: str
     skipped_game: str
+    channel_excluded: str
 
 
 class BrowserMessages(TypedDict):
@@ -140,6 +141,7 @@ class GUIProgress(TypedDict):
     drop_progress: str
     campaign_progress: str
     estimated: str
+    done_at: str
 
 
 class GUIChannelHeadings(TypedDict):
@@ -152,6 +154,7 @@ class GUIChannelHeadings(TypedDict):
 class GUIChannels(TypedDict):
     name: str
     switch: str
+    exclude: str
     online: str
     checking: str
     pending: str
@@ -167,6 +170,11 @@ class GUIInvFilter(TypedDict):
     expired: str
     excluded: str
     finished: str
+    claimable: str
+    sort: str
+    sort_default: str
+    sort_ends: str
+    sort_progress: str
     refresh: str
 
 
@@ -278,6 +286,8 @@ class GUISettings(TypedDict):
     game_name: str
     priority: str
     exclude: str
+    channel_exclude: str
+    channel_login: str
     export_lists: str
     import_lists: str
     export_done: str
@@ -388,6 +398,7 @@ default_translation: Translation = {
         "skip_nothing": "Nothing to skip — not currently watching a channel.",
         "skipped_channel": "Skipping channel for this session: {channel}",
         "skipped_game": "Deferring game until other wanted games are done: {game}",
+        "channel_excluded": "Channel excluded from mining: {channel}",
     },
     "login": {
         "unexpected_content": (
@@ -498,10 +509,12 @@ default_translation: Translation = {
             "drop_progress": "Progress:",
             "campaign_progress": "Progress:",
             "estimated": " (estimated)",
+            "done_at": "{remaining}  ·  done {time}",
         },
         "channels": {
             "name": "Channels",
             "switch": "Switch",
+            "exclude": "Exclude",
             "online": "ONLINE  ✔",
             "checking": "CHECKING ⏳",
             "pending": "OFFLINE ⏳",
@@ -522,6 +535,11 @@ default_translation: Translation = {
                 "expired": "Expired",
                 "excluded": "Excluded",
                 "finished": "Finished",
+                "claimable": "Still earnable",
+                "sort": "Sort:",
+                "sort_default": "Default",
+                "sort_ends": "Ending soonest",
+                "sort_progress": "Progress",
                 "refresh": "Refresh",
             },
             "status": {
@@ -609,6 +627,8 @@ default_translation: Translation = {
             "game_name": "Game name",
             "priority": "Priority",
             "exclude": "Exclude",
+            "channel_exclude": "Excluded channels",
+            "channel_login": "channel login",
             "export_lists": "Export lists…",
             "import_lists": "Import lists…",
             "export_done": "Saved priority and exclude lists to:\n{path}",
