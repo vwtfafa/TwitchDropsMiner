@@ -66,10 +66,17 @@ def parse_creator_badge_event(
         for campaign in entry.get("campaigns") or []:
             if campaign.get("brandName") != _CREATOR_BADGE_BRAND:
                 continue
+            # Prefer ACTIVE campaigns only (EXPIRED/UPCOMING are not mineable).
+            if campaign.get("status") != "ACTIVE":
+                continue
             campaign_watch: list[CreatorBadgeWatchReward] = []
             for group in campaign.get("rewardGroups") or []:
                 criteria = group.get("progressCriteria") or {}
                 if criteria.get("requirementType") != "WATCH":
+                    continue
+                self_edge = group.get("self") or {}
+                # EXPIRED tiers are non-mineable even when requirementType is WATCH.
+                if self_edge.get("status") == "EXPIRED":
                     continue
                 campaign_watch.append(_parse_watch_reward(group))
             if not campaign_watch:
@@ -138,6 +145,24 @@ def filter_excluded(
 ) -> list[CreatorBadgeEvent]:
     excluded = {name.casefold() for name in channel_exclude}
     return [e for e in events if e.channel_login.casefold() not in excluded]
+
+
+def select_targets(
+    events: list[CreatorBadgeEvent],
+    *,
+    exclude: set[str],
+    enabled: bool,
+    priority: str,
+    has_finishable: bool,
+) -> list[CreatorBadgeEvent]:
+    # Mining interrupt/fallback is applied at can_watch time; discovery only needs
+    # the master toggle. Keep priority/has_finishable in the signature for callers.
+    if not enabled:
+        return []
+    _ = (priority, has_finishable)
+    filtered = filter_excluded(events, exclude)
+    incomplete = [e for e in filtered if has_incomplete_watch_rewards(e)]
+    return sort_creator_badge_targets(incomplete)
 
 
 def is_stuck(*, last_progress_at: datetime, now: datetime) -> bool:

@@ -13,6 +13,7 @@ from creator_badges import (
     is_stuck,
     parse_creator_badge_event,
     remaining_watch_minutes,
+    select_targets,
     should_mine_creator_badges,
     sort_creator_badge_targets,
 )
@@ -180,3 +181,95 @@ def test_default_creator_badge_settings_off_and_fallback():
     from settings import default_settings
     assert default_settings["creator_badge_watch"] is False
     assert default_settings["creator_badge_priority"] == "fallback"
+
+
+def test_creator_badge_owned_campaigns_query_is_full_body_not_persisted():
+    from constants import creator_badge_owned_campaigns_query
+
+    op = creator_badge_owned_campaigns_query(["111882197"])
+    assert op["operationName"] == "CreatorBadgeOwnedCampaigns"
+    assert "channelOwnedDropCampaigns" in op["query"]
+    assert op["variables"] == {"channelIDs": ["111882197"]}
+    assert "extensions" not in op
+
+
+def test_parse_maps_login_from_follows_not_payload():
+    """Fixtures only expose channel.id; login must come from ChannelFollows map."""
+    payload = _load("creator_badge_event_active.json")
+    channel = payload["data"]["channelOwnedDropCampaigns"][0]["channel"]
+    assert set(channel.keys()) == {"id"}
+    event = parse_creator_badge_event(
+        payload, channel_id=int(channel["id"]), channel_login="FromFollows"
+    )
+    assert event is not None
+    assert event.channel_login == "FromFollows"
+
+
+def test_parse_skips_non_active_campaigns_and_expired_watch_tiers():
+    payload = _load("creator_badge_event_active.json")
+    campaign = payload["data"]["channelOwnedDropCampaigns"][0]["campaigns"][0]
+    campaign["status"] = "EXPIRED"
+    assert (
+        parse_creator_badge_event(
+            payload, channel_id=CHANNEL_ID, channel_login=CHANNEL_LOGIN
+        )
+        is None
+    )
+
+    payload = _load("creator_badge_event_active.json")
+    for group in payload["data"]["channelOwnedDropCampaigns"][0]["campaigns"][0][
+        "rewardGroups"
+    ]:
+        criteria = group.get("progressCriteria") or {}
+        if criteria.get("requirementType") == "WATCH":
+            group["self"]["status"] = "EXPIRED"
+    assert (
+        parse_creator_badge_event(
+            payload, channel_id=CHANNEL_ID, channel_login=CHANNEL_LOGIN
+        )
+        is None
+    )
+
+
+def test_select_targets_applies_exclude_incomplete_and_sort():
+    ends_early = datetime(2026, 11, 20, tzinfo=timezone.utc)
+    ends_late = datetime(2026, 11, 25, tzinfo=timezone.utc)
+    incomplete_early = CreatorBadgeEvent(
+        1,
+        "keep_early",
+        ends_early,
+        [CreatorBadgeWatchReward("1", "a", 60, 0, False)],
+    )
+    incomplete_late = CreatorBadgeEvent(
+        2,
+        "keep_late",
+        ends_late,
+        [CreatorBadgeWatchReward("2", "b", 60, 0, False)],
+    )
+    complete = CreatorBadgeEvent(
+        3,
+        "done_chan",
+        ends_early,
+        [CreatorBadgeWatchReward("3", "c", 60, 60, True)],
+    )
+    excluded = CreatorBadgeEvent(
+        4,
+        "Nope",
+        ends_early,
+        [CreatorBadgeWatchReward("4", "d", 60, 0, False)],
+    )
+    selected = select_targets(
+        [incomplete_late, complete, excluded, incomplete_early],
+        exclude={"nope"},
+        enabled=True,
+        priority="fallback",
+        has_finishable=False,
+    )
+    assert [e.channel_login for e in selected] == ["keep_early", "keep_late"]
+    assert select_targets(
+        [incomplete_early],
+        exclude=set(),
+        enabled=False,
+        priority="fallback",
+        has_finishable=False,
+    ) == []

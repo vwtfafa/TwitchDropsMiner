@@ -68,6 +68,12 @@ from constants import (
     ClientType,
     PriorityMode,
     WebsocketTopic,
+    creator_badge_owned_campaigns_query,
+)
+from creator_badges import (
+    CreatorBadgeEvent,
+    parse_creator_badge_event,
+    select_targets,
 )
 from lifecycle import (
     DEFERRED_REQUESTS,
@@ -604,6 +610,9 @@ class Twitch:
         # status hint while idle, so users don't have to guess when new campaigns
         # will appear.
         self._next_reload_at: datetime | None = None
+        # Creator Badge watch-time targets discovered from follows (Task 4+).
+        self._creator_badge_events: list[CreatorBadgeEvent] = []
+        self._creator_badge_events_at: datetime | None = None
 
     async def get_session(self) -> aiohttp.ClientSession:
         if (session := self._session) is not None:
@@ -2227,6 +2236,133 @@ class Twitch:
         # Keep the user-visible schedule in sync with the task's own first period.
         self._next_reload_at = datetime.now(timezone.utc) + timedelta(hours=1)
         self._mnt_task = asyncio.create_task(self._maintenance_task())
+        # Creator Badge discovery shares the inventory/reload cadence, but is
+        # additionally gated to ~45 minutes so follow paging is not hammered.
+        await self.fetch_creator_badge_targets()
+
+    async def fetch_creator_badge_targets(self, *, force: bool = False) -> list[CreatorBadgeEvent]:
+        """Page follows, batch Creator Badge GQL, store incomplete watch targets."""
+        if not self.settings.creator_badge_watch:
+            self._creator_badge_events = []
+            return self._creator_badge_events
+
+        now = datetime.now(timezone.utc)
+        if (
+            not force
+            and self._creator_badge_events_at is not None
+            and now - self._creator_badge_events_at < timedelta(minutes=45)
+        ):
+            return self._creator_badge_events
+
+        follows = await self._page_channel_follows(limit=500)
+        if not follows:
+            self._creator_badge_events = []
+            self._creator_badge_events_at = now
+            return self._creator_badge_events
+
+        login_by_id = {cid: login for cid, login in follows}
+        # SideNav presence filter first, then full progress query for hits.
+        candidate_ids = await self._creator_badge_sidenav_hits(list(login_by_id))
+        if not candidate_ids:
+            self._creator_badge_events = []
+            self._creator_badge_events_at = now
+            return self._creator_badge_events
+
+        events: list[CreatorBadgeEvent] = []
+        for id_chunk in chunk(candidate_ids, 20):
+            response = await self.gql_request(
+                creator_badge_owned_campaigns_query([str(cid) for cid in id_chunk])
+            )
+            owned = (response.get("data") or {}).get("channelOwnedDropCampaigns") or []
+            for entry in owned:
+                channel = entry.get("channel") or {}
+                raw_id = channel.get("id")
+                if raw_id is None:
+                    continue
+                channel_id = int(raw_id)
+                login = login_by_id.get(channel_id)
+                if not login:
+                    continue
+                # Re-wrap a single-channel payload so parse_creator_badge_event
+                # can reuse the same fixture/document shape.
+                single = {"data": {"channelOwnedDropCampaigns": [entry]}}
+                event = parse_creator_badge_event(
+                    single, channel_id=channel_id, channel_login=login
+                )
+                if event is not None:
+                    events.append(event)
+
+        selected = select_targets(
+            events,
+            exclude=self.settings.channel_exclude,
+            enabled=True,
+            priority=self.settings.creator_badge_priority,
+            has_finishable=False,
+        )
+        self._creator_badge_events = selected
+        self._creator_badge_events_at = now
+        logger.log(
+            CALL,
+            f"Creator Badge targets: {len(selected)} "
+            f"(from {len(candidate_ids)} sidenav hits / {len(follows)} follows)",
+        )
+        return self._creator_badge_events
+
+    async def _page_channel_follows(self, *, limit: int = 500) -> list[tuple[int, str]]:
+        """Paginate ChannelFollows up to ``limit`` (id, login) pairs."""
+        follows: list[tuple[int, str]] = []
+        cursor: str | None = None
+        page_size = min(100, limit)
+        while len(follows) < limit:
+            variables: JsonType = {"limit": page_size, "order": "DESC"}
+            if cursor:
+                variables["cursor"] = cursor
+            response = await self.gql_request(
+                GQL_QUERIES["ChannelFollows"].with_variables(variables)
+            )
+            conn = ((response.get("data") or {}).get("user") or {}).get("follows") or {}
+            edges = conn.get("edges") or []
+            if not edges:
+                break
+            for edge in edges:
+                node = edge.get("node") or {}
+                raw_id = node.get("id")
+                login = node.get("login")
+                if raw_id is None or not login:
+                    continue
+                follows.append((int(raw_id), str(login)))
+                if len(follows) >= limit:
+                    break
+            page_info = conn.get("pageInfo") or {}
+            if not page_info.get("hasNextPage"):
+                break
+            # Prefer edge cursor (Channel Points miner pattern); fall back to pageInfo.
+            last_cursor = edges[-1].get("cursor") or page_info.get("endCursor")
+            if not last_cursor or last_cursor == cursor:
+                break
+            cursor = last_cursor
+        return follows[:limit]
+
+    async def _creator_badge_sidenav_hits(self, channel_ids: list[int]) -> list[int]:
+        """Return channel IDs that SideNav reports as having Creator Badge campaigns."""
+        hits: list[int] = []
+        for id_chunk in chunk(channel_ids, 30):
+            response = await self.gql_request(
+                GQL_QUERIES["SideNavCreatorBadgeDrops"].with_variables(
+                    {"channelIDs": [str(cid) for cid in id_chunk]}
+                )
+            )
+            owned = (response.get("data") or {}).get("channelOwnedDropCampaigns") or []
+            for entry in owned:
+                campaigns = entry.get("campaigns") or []
+                if not campaigns:
+                    continue
+                channel = entry.get("channel") or {}
+                raw_id = channel.get("id")
+                if raw_id is None:
+                    continue
+                hits.append(int(raw_id))
+        return hits
 
     def get_active_campaign(self, channel: Channel | None = None) -> DropsCampaign | None:
         if not self.wanted_games:
