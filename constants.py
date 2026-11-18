@@ -464,6 +464,27 @@ GQL_QUERIES: dict[str, GQLPersistedQuery] = {
             }
         },
     ),
+    # paginated followed channels (Creator Badge discovery)
+    "ChannelFollows": GQLPersistedQuery(
+        "ChannelFollows",
+        "eecf815273d3d949e5cf0085cc5084cd8a1b5b7b6f7990cf43cb0beadf546907",
+        variables={
+            "limit": ...,  # page size (e.g. 100)
+            "order": "DESC",
+            # optional: "cursor": <pageInfo endCursor>
+        },
+    ),
+    # side-nav Creator Badge presence (distributionType only; no watch progress)
+    "SideNavCreatorBadgeDrops": GQLPersistedQuery(
+        "SideNavCreatorBadgeDrops",
+        "132c6783c8383048c1c74fb52c49a996de8c000a6084fa817f2cbc5453a9f643",
+        variables={
+            "channelIDs": ...,  # list[str] channel IDs
+        },
+    ),
+    # NOTE: Creator Badge watch progress uses full-query channelOwnedDropCampaigns
+    # (operationName CreatorBadgeOwnedCampaigns). No Twitch-registered persisted
+    # hash — do not invent one. See docs/superpowers/spikes/2026-11-18-creator-badge-gql.md
 }
 
 
