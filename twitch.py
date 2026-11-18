@@ -2383,6 +2383,9 @@ class Twitch:
             if not self._can_watch_for_game_campaign(channel):
                 self.stop_watching()
                 self.request_state(State.CHANNEL_SWITCH)
+            else:
+                # Drop stale creator_badge_watching status while keeping the stream.
+                self.gui.status.update(self._watching_status_text(channel))
             return
         try:
             response = await self.gql_request(

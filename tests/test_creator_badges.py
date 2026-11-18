@@ -466,6 +466,8 @@ def test_fallback_dual_purpose_channel_does_not_stop_watching():
     import asyncio
     from types import SimpleNamespace
 
+    from translate import _
+
     twitch = _twitch_for_badge_progress()
     event = CreatorBadgeEvent(
         42,
@@ -478,6 +480,8 @@ def test_fallback_dual_purpose_channel_does_not_stop_watching():
     channel = SimpleNamespace(id=42, login="dual", name="Dual")
     twitch._can_watch_for_game_campaign = lambda ch: True  # type: ignore[method-assign]
 
+    status_updates: list[str] = []
+    twitch.gui.status.update = lambda text: status_updates.append(text)  # type: ignore[method-assign]
     stopped: list[bool] = []
     requested: list[object] = []
     twitch.stop_watching = lambda: stopped.append(True)  # type: ignore[method-assign]
@@ -487,6 +491,9 @@ def test_fallback_dual_purpose_channel_does_not_stop_watching():
     assert stopped == []
     assert requested == []
     assert twitch._creator_badge_events == [event]
+    expected = _("status", "watching").format(channel="Dual")
+    assert status_updates == [expected]
+    assert "Creator Badge" not in expected
 
 
 def test_fallback_badge_only_channel_stops_when_mining_disallowed():
