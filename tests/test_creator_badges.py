@@ -587,7 +587,6 @@ def test_get_priority_orders_badge_targets_by_discovery_list():
 def test_fetch_prunes_stale_creator_badge_progress_at():
     """Refresh keeps stuck-guard stamps only for current selected channel_ids."""
     import asyncio
-    from types import SimpleNamespace
 
     twitch = _twitch_for_badge_progress()
     now = datetime.now(timezone.utc)
