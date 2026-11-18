@@ -94,3 +94,27 @@ Did **not** add a fake persisted hash for `CreatorBadgeOwnedCampaigns`.
 ## Gate implication
 
 Product wiring can discover WATCH tiers and poll `self.status` / `currentMinutesWatched`, but **cannot** read required minutes or sort by remaining time until a goal field/op is found. Recommend Tasks 2–6 proceed only with that limitation accepted, or pause for another capture while a drops-tracker UI with visible “Xh watch” is open.
+
+## Smoke checklist (Task 6)
+
+### Unit-verified (2026-11-18)
+
+`python -m pytest tests/test_creator_badges.py tests/test_inventory_state.py tests/test_channel_state.py -v` → **48 passed**
+
+Covered in unit tests (no live Twitch session):
+
+- WATCH-only parse / SUB filter; exclude list; sort (ends_at, remaining when known)
+- Fallback vs interrupt vs finishable wanted game; dual-purpose keep vs badge-only leave
+- Progress apply / earn detection; stuck after 15 min; stuck still runs on GQL fail
+- Discovery disable clears cache; settings defaults; full-body owned-campaigns query
+- Channel/inventory regressions for touched helpers
+
+### Needs a live Creator Badge event (not run)
+
+Do **not** treat as verified until exercised against a real followed channel with an active WATCH event:
+
+1. Toggle **on** → miner switches to a followed badge channel when no finishable wanted game (fallback) or even with one (interrupt).
+2. Watch progress: `currentMinutesWatched` / status updates while mining; UI shows creator-badge watching status.
+3. All WATCH tiers complete → miner leaves the channel.
+4. Toggle **off** → no Creator Badge targeting / discovery refresh stopped; game mining unchanged.
+5. Optional: stuck path (no progress ~15 min) and dual-purpose channel (badge + game) behavior under live GQL.
