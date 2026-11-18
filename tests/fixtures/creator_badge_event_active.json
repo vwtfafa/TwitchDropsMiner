@@ -1,11 +1,10 @@
 {
-  "_comment": "Real GQL response from channelOwnedDropCampaigns (CreatorBadgeOwnedCampaigns full query) on 2026-11-18. Includes WATCH + SUB reward groups. Note: DropsProgressCriteria has no requiredMinutes* field in live schema; self.currentMinutesWatched may be null until watch progress accrues.",
+  "_comment": "Real GQL response from channelOwnedDropCampaigns (CreatorBadgeOwnedCampaigns full query) on 2026-11-18. Shape matches documented selection channel { id } only (login is not queryable on this Channel). Includes WATCH + SUB reward groups. Note: DropsProgressCriteria has no requiredMinutes* field in live schema; self.currentMinutesWatched may be null until watch progress accrues.",
   "data": {
     "channelOwnedDropCampaigns": [
       {
         "channel": {
-          "id": "111882197",
-          "login": "emilycc"
+          "id": "111882197"
         },
         "campaigns": [
           {

@@ -74,10 +74,10 @@ Computed sha256 of printed query (not Twitch-persisted):
 
 | File | Nature |
 | --- | --- |
-| `tests/fixtures/creator_badge_event_active.json` | **Real** response (`emilycc` / `111882197`) with WATCH + SUB groups |
+| `tests/fixtures/creator_badge_event_active.json` | **Real** response for channel id `111882197` with WATCH + SUB groups; `channel` is `{ id }` only (matches documented query) |
 | `tests/fixtures/creator_badge_event_sub_only.json` | **Filtered real** response: same campaign, WATCH groups removed (no live SUB-only-only event among follows). Labeled in `_comment` |
 
-Live channels with active Creator Badge among follows (2026-11-18): `emilycc`, `jasontheween`, `lacy`, `gamestar`.
+Live channel ids with active Creator Badge among follows (2026-11-18): `111882197`, `107117952`, `494543675`, `26764651` (logins resolved separately via `ChannelFollows`, not via this selection).
 
 ## Client mining notes
 
