@@ -425,3 +425,153 @@ def test_safe_refresh_keeps_prior_events_on_failure():
     twitch.fetch_creator_badge_targets = boom  # type: ignore[method-assign]
     asyncio.run(twitch._refresh_creator_badge_targets_safe())
     assert twitch._creator_badge_events == [prior]
+
+
+def _twitch_for_badge_progress(**settings_kwargs):
+    import pytest
+    from types import SimpleNamespace
+
+    pytest.importorskip("pystray")
+    from twitch import Twitch
+
+    class _FakeGUI:
+        def __init__(self) -> None:
+            self.status = SimpleNamespace(update=lambda *_: None)
+            self.tray = SimpleNamespace(change_icon=lambda *_: None)
+            self.channels = SimpleNamespace(
+                set_watching=lambda *_: None,
+                clear_watching=lambda: None,
+            )
+
+        def set_state_hint(self, hint: str) -> None:
+            pass
+
+        def clear_drop(self) -> None:
+            pass
+
+        def print(self, message: str) -> None:
+            pass
+
+    defaults = {
+        "creator_badge_watch": True,
+        "creator_badge_priority": "fallback",
+        "channel_exclude": set(),
+    }
+    defaults.update(settings_kwargs)
+    return Twitch(SimpleNamespace(**defaults), gui=_FakeGUI())
+
+
+def test_fallback_dual_purpose_channel_does_not_stop_watching():
+    """Badge mining disallowed but channel still earnable for a game → no thrash."""
+    import asyncio
+    from types import SimpleNamespace
+
+    twitch = _twitch_for_badge_progress()
+    event = CreatorBadgeEvent(
+        42,
+        "dual",
+        datetime(2026, 12, 1, tzinfo=timezone.utc),
+        [CreatorBadgeWatchReward("1", "a", None, 0, False)],
+    )
+    twitch._creator_badge_events = [event]
+    twitch.has_finishable_wanted_game = lambda: True  # type: ignore[method-assign]
+    channel = SimpleNamespace(id=42, login="dual", name="Dual")
+    twitch._can_watch_for_game_campaign = lambda ch: True  # type: ignore[method-assign]
+
+    stopped: list[bool] = []
+    requested: list[object] = []
+    twitch.stop_watching = lambda: stopped.append(True)  # type: ignore[method-assign]
+    twitch.request_state = lambda state: requested.append(state)  # type: ignore[method-assign]
+
+    asyncio.run(twitch._update_creator_badge_progress(channel))  # type: ignore[arg-type]
+    assert stopped == []
+    assert requested == []
+    assert twitch._creator_badge_events == [event]
+
+
+def test_fallback_badge_only_channel_stops_when_mining_disallowed():
+    import asyncio
+    from types import SimpleNamespace
+
+    from constants import State
+
+    twitch = _twitch_for_badge_progress()
+    event = CreatorBadgeEvent(
+        7,
+        "badgeonly",
+        datetime(2026, 12, 1, tzinfo=timezone.utc),
+        [CreatorBadgeWatchReward("1", "a", None, 0, False)],
+    )
+    twitch._creator_badge_events = [event]
+    twitch.has_finishable_wanted_game = lambda: True  # type: ignore[method-assign]
+    channel = SimpleNamespace(id=7, login="badgeonly", name="BadgeOnly")
+    twitch._can_watch_for_game_campaign = lambda ch: False  # type: ignore[method-assign]
+
+    stopped: list[bool] = []
+    requested: list[object] = []
+    twitch.stop_watching = lambda: stopped.append(True)  # type: ignore[method-assign]
+    twitch.request_state = lambda state: requested.append(state)  # type: ignore[method-assign]
+
+    asyncio.run(twitch._update_creator_badge_progress(channel))  # type: ignore[arg-type]
+    assert stopped == [True]
+    assert requested == [State.CHANNEL_SWITCH]
+
+
+def test_progress_gql_failure_still_applies_stuck_guard():
+    import asyncio
+    from types import SimpleNamespace
+
+    from constants import State
+
+    twitch = _twitch_for_badge_progress()
+    event = CreatorBadgeEvent(
+        9,
+        "stuckchan",
+        datetime(2026, 12, 1, tzinfo=timezone.utc),
+        [CreatorBadgeWatchReward("1", "a", None, 0, False)],
+    )
+    twitch._creator_badge_events = [event]
+    twitch.has_finishable_wanted_game = lambda: False  # type: ignore[method-assign]
+    twitch._creator_badge_progress_at[9] = datetime.now(timezone.utc) - timedelta(
+        minutes=STUCK_PROGRESS_MINUTES
+    )
+    channel = SimpleNamespace(id=9, login="stuckchan", name="Stuck")
+
+    async def boom(_op):
+        raise RuntimeError("gql down")
+
+    twitch.gql_request = boom  # type: ignore[method-assign]
+    stopped: list[bool] = []
+    requested: list[object] = []
+    twitch.stop_watching = lambda: stopped.append(True)  # type: ignore[method-assign]
+    twitch.request_state = lambda state: requested.append(state)  # type: ignore[method-assign]
+
+    asyncio.run(twitch._update_creator_badge_progress(channel))  # type: ignore[arg-type]
+    assert twitch._creator_badge_events == []
+    assert stopped == [True]
+    assert requested == [State.CHANNEL_SWITCH]
+
+
+def test_get_priority_orders_badge_targets_by_discovery_list():
+    from types import SimpleNamespace
+
+    twitch = _twitch_for_badge_progress()
+    early = CreatorBadgeEvent(
+        1,
+        "early",
+        datetime(2026, 11, 20, tzinfo=timezone.utc),
+        [CreatorBadgeWatchReward("1", "a", 30, 0, False)],
+    )
+    late = CreatorBadgeEvent(
+        2,
+        "late",
+        datetime(2026, 11, 25, tzinfo=timezone.utc),
+        [CreatorBadgeWatchReward("2", "b", 30, 0, False)],
+    )
+    twitch._creator_badge_events = [early, late]
+    twitch.has_finishable_wanted_game = lambda: False  # type: ignore[method-assign]
+
+    ch_early = SimpleNamespace(login="early", game=None)
+    ch_late = SimpleNamespace(login="late", game=None)
+    assert twitch.get_priority(ch_early) < twitch.get_priority(ch_late)  # type: ignore[arg-type]
+    assert twitch.get_priority(ch_early) < 0  # type: ignore[arg-type]

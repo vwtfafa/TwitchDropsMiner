@@ -900,7 +900,13 @@ class Twitch:
         """
         # Eligible Creator Badge targets outrank game channels whenever mining
         # them is allowed (interrupt always; fallback only with no finishable game).
+        # Among badge targets, preserve discovery order (ends_at / remaining).
         if self._creator_badge_can_mine_channel(channel):
+            login = channel.login.casefold()
+            n = len(self._creator_badge_events)
+            for i, event in enumerate(self._creator_badge_events):
+                if event.channel_login.casefold() == login:
+                    return -n + i
             return -1
         if (
             (game := channel.game) is None  # None when OFFLINE or no game set
@@ -1580,6 +1586,10 @@ class Twitch:
             return False
         if self._creator_badge_can_mine_channel(channel):
             return True
+        return self._can_watch_for_game_campaign(channel)
+
+    def _can_watch_for_game_campaign(self, channel: Channel) -> bool:
+        """Game-drop eligibility only (no Creator Badge short-circuit)."""
         for campaign in self.inventory:
             if (
                 campaign.can_earn(channel)  # let the campaign do the "special games" check
@@ -2349,14 +2359,30 @@ class Twitch:
         ]
         self._creator_badge_progress_at.pop(event.channel_id, None)
 
+    def _leave_creator_badge_stuck(self, channel: Channel, event: CreatorBadgeEvent) -> None:
+        self.print(
+            _("status", "creator_badge_watching").format(
+                channel=channel.name,
+                minutes=self._creator_badge_status_minutes(event),
+            )
+            + " — stuck, skipping"
+        )
+        logger.log(CALL, f"Creator Badge stuck on {channel.login}; skipping")
+        self._drop_creator_badge_event(event)
+        self.stop_watching()
+        self.request_state(State.CHANNEL_SWITCH)
+
     async def _update_creator_badge_progress(self, channel: Channel) -> None:
         event = self._creator_badge_event_for(channel)
         if event is None:
             return
         if not self._creator_badge_mining_allowed():
-            # Finishable game appeared (fallback) — leave badge mining to reselect.
-            self.stop_watching()
-            self.request_state(State.CHANNEL_SWITCH)
+            # Finishable game appeared (fallback). Only abandon the watch if this
+            # channel is not also a valid game-campaign target — dual-purpose
+            # channels must keep mining the game without a thrashy stop/switch.
+            if not self._can_watch_for_game_campaign(channel):
+                self.stop_watching()
+                self.request_state(State.CHANNEL_SWITCH)
             return
         try:
             response = await self.gql_request(
@@ -2366,6 +2392,10 @@ class Twitch:
             logger.exception(
                 "Creator Badge progress query failed for %s", channel.login
             )
+            now = datetime.now(timezone.utc)
+            last_at = self._creator_badge_progress_at.get(channel.id, now)
+            if is_stuck(last_progress_at=last_at, now=now):
+                self._leave_creator_badge_stuck(channel, event)
             return
         progressed = apply_creator_badge_progress(event, response)
         now = datetime.now(timezone.utc)
@@ -2383,17 +2413,7 @@ class Twitch:
             return
         last_at = self._creator_badge_progress_at.get(channel.id, now)
         if is_stuck(last_progress_at=last_at, now=now):
-            self.print(
-                _("status", "creator_badge_watching").format(
-                    channel=channel.name,
-                    minutes=self._creator_badge_status_minutes(event),
-                )
-                + " — stuck, skipping"
-            )
-            logger.log(CALL, f"Creator Badge stuck on {channel.login}; skipping")
-            self._drop_creator_badge_event(event)
-            self.stop_watching()
-            self.request_state(State.CHANNEL_SWITCH)
+            self._leave_creator_badge_stuck(channel, event)
 
     async def fetch_creator_badge_targets(self, *, force: bool = False) -> list[CreatorBadgeEvent]:
         """Page follows, batch Creator Badge GQL, store incomplete watch targets."""
