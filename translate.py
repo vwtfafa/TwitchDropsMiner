@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 class StatusMessages(TypedDict):
     terminated: str
     watching: str
+    creator_badge_watching: str
     goes_online: str
     goes_offline: str
     claimed_drop: str
@@ -365,6 +366,9 @@ default_translation: Translation = {
     "status": {
         "terminated": "\nApplication Terminated.\nClose the window to exit the application.",
         "watching": "Watching: {channel}",
+        "creator_badge_watching": (
+            "Creator Badge: watching {channel} ({minutes} min)"
+        ),
         "goes_online": "{channel} goes ONLINE, switching...",
         "goes_offline": "{channel} goes OFFLINE, switching...",
         "claimed_drop": "Claimed drop: {drop}",

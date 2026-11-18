@@ -167,3 +167,52 @@ def select_targets(
 
 def is_stuck(*, last_progress_at: datetime, now: datetime) -> bool:
     return now - last_progress_at >= timedelta(minutes=STUCK_PROGRESS_MINUTES)
+
+
+def active_creator_badge_event_for_channel(
+    events: list[CreatorBadgeEvent],
+    *,
+    channel_login: str,
+) -> CreatorBadgeEvent | None:
+    """Return the incomplete event whose login matches ``channel_login`` (casefold)."""
+    login = channel_login.casefold()
+    for event in events:
+        if event.channel_login.casefold() != login:
+            continue
+        if has_incomplete_watch_rewards(event):
+            return event
+    return None
+
+
+def event_watch_rewards_complete(event: CreatorBadgeEvent) -> bool:
+    """True when the event has watch rewards and every one is earned."""
+    return bool(event.watch_rewards) and not has_incomplete_watch_rewards(event)
+
+
+def apply_creator_badge_progress(
+    event: CreatorBadgeEvent,
+    payload: dict[str, Any],
+) -> bool:
+    """
+    Merge a CreatorBadgeOwnedCampaigns response into ``event``.
+
+    Returns True if any tier's ``current_minutes`` increased or became earned.
+    """
+    fresh = parse_creator_badge_event(
+        payload,
+        channel_id=event.channel_id,
+        channel_login=event.channel_login,
+    )
+    if fresh is None:
+        return False
+    old_minutes = {r.id: r.current_minutes for r in event.watch_rewards}
+    old_earned = {r.id: r.is_earned for r in event.watch_rewards}
+    event.ends_at = fresh.ends_at
+    event.watch_rewards = fresh.watch_rewards
+    progressed = False
+    for reward in event.watch_rewards:
+        prev_m = old_minutes.get(reward.id, 0)
+        prev_e = old_earned.get(reward.id, False)
+        if reward.current_minutes > prev_m or (reward.is_earned and not prev_e):
+            progressed = True
+    return progressed

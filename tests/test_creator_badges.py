@@ -8,6 +8,9 @@ from creator_badges import (
     STUCK_PROGRESS_MINUTES,
     CreatorBadgeEvent,
     CreatorBadgeWatchReward,
+    active_creator_badge_event_for_channel,
+    apply_creator_badge_progress,
+    event_watch_rewards_complete,
     filter_excluded,
     has_incomplete_watch_rewards,
     is_stuck,
@@ -310,6 +313,80 @@ def test_disable_clears_events_and_refresh_timestamp():
     assert result == []
     assert twitch._creator_badge_events == []
     assert twitch._creator_badge_events_at is None
+
+
+def test_active_event_for_channel_matches_login():
+    ends = datetime(2026, 12, 1, tzinfo=timezone.utc)
+    incomplete = CreatorBadgeEvent(
+        1,
+        "FooBar",
+        ends,
+        [CreatorBadgeWatchReward("1", "a", None, 0, False)],
+    )
+    complete = CreatorBadgeEvent(
+        2,
+        "other",
+        ends,
+        [CreatorBadgeWatchReward("2", "b", None, 10, True)],
+    )
+    events = [complete, incomplete]
+    assert active_creator_badge_event_for_channel(events, channel_login="foobar") is incomplete
+    assert active_creator_badge_event_for_channel(events, channel_login="other") is None
+    assert active_creator_badge_event_for_channel(events, channel_login="missing") is None
+
+
+def test_event_complete_when_all_watch_rewards_earned():
+    ends = datetime(2026, 12, 1, tzinfo=timezone.utc)
+    done = CreatorBadgeEvent(
+        1,
+        "a",
+        ends,
+        [
+            CreatorBadgeWatchReward("1", "t1", 60, 60, True),
+            CreatorBadgeWatchReward("2", "t2", 120, 120, True),
+        ],
+    )
+    open_tier = CreatorBadgeEvent(
+        1,
+        "a",
+        ends,
+        [
+            CreatorBadgeWatchReward("1", "t1", 60, 60, True),
+            CreatorBadgeWatchReward("2", "t2", 120, 30, False),
+        ],
+    )
+    empty = CreatorBadgeEvent(1, "a", ends, [])
+    assert event_watch_rewards_complete(done) is True
+    assert event_watch_rewards_complete(open_tier) is False
+    assert event_watch_rewards_complete(empty) is False
+
+
+def test_apply_progress_updates_minutes_and_detects_earn():
+    payload = _load("creator_badge_event_active.json")
+    event = parse_creator_badge_event(
+        payload, channel_id=CHANNEL_ID, channel_login=CHANNEL_LOGIN
+    )
+    assert event is not None
+    assert event.watch_rewards[0].current_minutes == 0
+    assert apply_creator_badge_progress(event, payload) is False
+
+    group = payload["data"]["channelOwnedDropCampaigns"][0]["campaigns"][0]["rewardGroups"]
+    for g in group:
+        criteria = g.get("progressCriteria") or {}
+        if criteria.get("requirementType") == "WATCH":
+            g["self"]["currentMinutesWatched"] = 12
+            g["self"]["status"] = "IN_PROGRESS"
+    assert apply_creator_badge_progress(event, payload) is True
+    assert event.watch_rewards[0].current_minutes == 12
+    assert event.watch_rewards[0].is_earned is False
+
+    for g in group:
+        criteria = g.get("progressCriteria") or {}
+        if criteria.get("requirementType") == "WATCH":
+            g["self"]["currentMinutesWatched"] = 12
+            g["self"]["status"] = "CLAIMABLE"
+    assert apply_creator_badge_progress(event, payload) is True
+    assert event_watch_rewards_complete(event) is True
 
 
 def test_safe_refresh_keeps_prior_events_on_failure():
