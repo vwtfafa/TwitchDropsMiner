@@ -153,7 +153,13 @@
                 "tray": "Autostart ins System Tray: ",
                 "priority_only": "Nur Priorität: ",
                 "dark_mode": "Dunkler Modus: ",
+                "creator_badge_watch": "Creator-Badge-Watchtime von gefolgten Kanälen farmen: ",
+                "creator_badge_priority": "Creator-Badge-Priorität: ",
                 "proxy": "Proxy (Erfordert Neustart):"
+            },
+            "creator_badge_priorities": {
+                "fallback": "Nach abschließbaren Spielen",
+                "interrupt": "Bevorzugt vor Spielen"
             },
             "sections": {
                 "appearance": "Darstellung",

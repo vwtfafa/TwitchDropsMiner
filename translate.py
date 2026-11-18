@@ -238,6 +238,8 @@ class GUISettingsGeneral(TypedDict):
     priority_mode: str
     auto_update: str
     fallback_badges_emotes: str
+    creator_badge_watch: str
+    creator_badge_priority: str
     proxy: str
     browser_path: str
     browser_path_hint: str
@@ -271,6 +273,11 @@ class GUIPriorityModes(TypedDict):
     low_availability: str
 
 
+class GUICreatorBadgePriorities(TypedDict):
+    fallback: str
+    interrupt: str
+
+
 class GUISettingsSections(TypedDict):
     appearance: str
     startup: str
@@ -283,6 +290,7 @@ class GUISettings(TypedDict):
     advanced: GUISettingsAdvanced
     sections: GUISettingsSections
     priority_modes: GUIPriorityModes
+    creator_badge_priorities: GUICreatorBadgePriorities
     game_name: str
     priority: str
     exclude: str
@@ -596,6 +604,10 @@ default_translation: Translation = {
                 "fallback_badges_emotes": (
                     "After priority list is done, mine badges/emotes: "
                 ),
+                "creator_badge_watch": (
+                    "Mine Creator Badge watch-time from followed channels: "
+                ),
+                "creator_badge_priority": "Creator Badge priority: ",
                 "proxy": "Proxy (requires restart):",
                 "browser_path": "Browser path (empty = auto):",
                 "browser_path_hint": (
@@ -617,6 +629,10 @@ default_translation: Translation = {
                 "priority_only": "Priority list only",
                 "ending_soonest": "Ending soonest",
                 "low_availability": "Low availability first",
+            },
+            "creator_badge_priorities": {
+                "fallback": "After finishable games",
+                "interrupt": "Prefer over games",
             },
             "sections": {
                 "appearance": "Appearance",

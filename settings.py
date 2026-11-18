@@ -41,6 +41,8 @@ class SettingsFile(TypedDict):
     tray_notifications: bool
     available_drops_check: bool
     fallback_badges_emotes: bool
+    creator_badge_watch: bool
+    creator_badge_priority: str
     priority_mode: PriorityMode
     channel_exclude: set[str]
     window_geometry: str
@@ -60,6 +62,8 @@ default_settings: SettingsFile = {
     "tray_notifications": True,
     "available_drops_check": False,
     "fallback_badges_emotes": True,
+    "creator_badge_watch": False,
+    "creator_badge_priority": "fallback",
     "priority_mode": PriorityMode.ENDING_SOONEST,
     "channel_exclude": set(),
     "window_geometry": "",
@@ -89,6 +93,8 @@ class Settings:
     tray_notifications: bool
     available_drops_check: bool
     fallback_badges_emotes: bool
+    creator_badge_watch: bool
+    creator_badge_priority: str
     priority_mode: PriorityMode
     channel_exclude: set[str]
     window_geometry: str
@@ -124,6 +130,12 @@ class Settings:
         # (and without) that panel being built, so validate here as the source of truth.
         if not isinstance(self._settings.get("priority_mode"), PriorityMode):
             self._settings["priority_mode"] = default_settings["priority_mode"]
+            migrated = True
+
+        if self._settings.get("creator_badge_priority") not in ("fallback", "interrupt"):
+            self._settings["creator_badge_priority"] = default_settings[
+                "creator_badge_priority"
+            ]
             migrated = True
 
         if migrated:

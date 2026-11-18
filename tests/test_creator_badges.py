@@ -174,3 +174,9 @@ def test_stuck_after_fifteen_minutes_without_progress():
     now = datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc)
     assert is_stuck(last_progress_at=now - timedelta(minutes=15), now=now) is True
     assert is_stuck(last_progress_at=now - timedelta(minutes=14), now=now) is False
+
+
+def test_default_creator_badge_settings_off_and_fallback():
+    from settings import default_settings
+    assert default_settings["creator_badge_watch"] is False
+    assert default_settings["creator_badge_priority"] == "fallback"
