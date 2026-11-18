@@ -273,3 +273,78 @@ def test_select_targets_applies_exclude_incomplete_and_sort():
         priority="fallback",
         has_finishable=False,
     ) == []
+
+
+def test_disable_clears_events_and_refresh_timestamp():
+    """Re-enable within 45 min must not hit a stale gate returning []."""
+    import asyncio
+    from types import SimpleNamespace
+
+    import pytest
+
+    pytest.importorskip("pystray")
+    from twitch import Twitch
+
+    class _FakeGUI:
+        def __init__(self) -> None:
+            self.status = SimpleNamespace(update=lambda *_: None)
+            self.tray = SimpleNamespace(change_icon=lambda *_: None)
+
+        def set_state_hint(self, hint: str) -> None:
+            pass
+
+    twitch = Twitch(
+        SimpleNamespace(creator_badge_watch=False),
+        gui=_FakeGUI(),
+    )
+    kept = CreatorBadgeEvent(
+        1,
+        "x",
+        datetime(2026, 12, 1, tzinfo=timezone.utc),
+        [CreatorBadgeWatchReward("1", "a", None, 0, False)],
+    )
+    twitch._creator_badge_events = [kept]
+    twitch._creator_badge_events_at = datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc)
+
+    result = asyncio.run(twitch.fetch_creator_badge_targets())
+    assert result == []
+    assert twitch._creator_badge_events == []
+    assert twitch._creator_badge_events_at is None
+
+
+def test_safe_refresh_keeps_prior_events_on_failure():
+    import asyncio
+    from types import SimpleNamespace
+
+    import pytest
+
+    pytest.importorskip("pystray")
+    from twitch import Twitch
+
+    class _FakeGUI:
+        def __init__(self) -> None:
+            self.status = SimpleNamespace(update=lambda *_: None)
+            self.tray = SimpleNamespace(change_icon=lambda *_: None)
+
+        def set_state_hint(self, hint: str) -> None:
+            pass
+
+    twitch = Twitch(
+        SimpleNamespace(creator_badge_watch=True),
+        gui=_FakeGUI(),
+    )
+    prior = CreatorBadgeEvent(
+        1,
+        "prior",
+        datetime(2026, 12, 1, tzinfo=timezone.utc),
+        [CreatorBadgeWatchReward("1", "a", None, 0, False)],
+    )
+    twitch._creator_badge_events = [prior]
+    twitch._creator_badge_events_at = datetime(2026, 11, 18, 11, 0, tzinfo=timezone.utc)
+
+    async def boom(*, force: bool = False):
+        raise RuntimeError("gql down")
+
+    twitch.fetch_creator_badge_targets = boom  # type: ignore[method-assign]
+    asyncio.run(twitch._refresh_creator_badge_targets_safe())
+    assert twitch._creator_badge_events == [prior]

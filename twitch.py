@@ -2238,12 +2238,23 @@ class Twitch:
         self._mnt_task = asyncio.create_task(self._maintenance_task())
         # Creator Badge discovery shares the inventory/reload cadence, but is
         # additionally gated to ~45 minutes so follow paging is not hammered.
-        await self.fetch_creator_badge_targets()
+        # Failures must not abort inventory: keep prior targets and continue.
+        await self._refresh_creator_badge_targets_safe()
+
+    async def _refresh_creator_badge_targets_safe(self) -> None:
+        try:
+            await self.fetch_creator_badge_targets()
+        except Exception:
+            logger.exception(
+                "Creator Badge discovery failed; keeping prior targets"
+            )
 
     async def fetch_creator_badge_targets(self, *, force: bool = False) -> list[CreatorBadgeEvent]:
         """Page follows, batch Creator Badge GQL, store incomplete watch targets."""
         if not self.settings.creator_badge_watch:
             self._creator_badge_events = []
+            # Clear the gate so re-enable does not return [] under a stale timestamp.
+            self._creator_badge_events_at = None
             return self._creator_badge_events
 
         now = datetime.now(timezone.utc)
