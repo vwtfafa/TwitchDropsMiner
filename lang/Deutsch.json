@@ -3,7 +3,6 @@
     "status": {
         "terminated": "\nAnwendung gestoppt.\nFenster schließen, um die Anwendung zu beenden",
         "watching": "{channel} wird zugesehen",
-        "creator_badge_watching": "Creator-Badge: {channel} wird zugesehen ({minutes} Min.)",
         "goes_online": "{channel} ist ONLINE gegangen, wechseln...",
         "goes_offline": "{channel} ist OFFLINE gegangen, wechseln...",
         "claimed_drop": "Drop abgeholt: {drop}",
@@ -154,13 +153,7 @@
                 "tray": "Autostart ins System Tray: ",
                 "priority_only": "Nur Priorität: ",
                 "dark_mode": "Dunkler Modus: ",
-                "creator_badge_watch": "Creator-Badge-Watchtime von gefolgten Kanälen farmen: ",
-                "creator_badge_priority": "Creator-Badge-Priorität: ",
                 "proxy": "Proxy (Erfordert Neustart):"
-            },
-            "creator_badge_priorities": {
-                "fallback": "Nach abschließbaren Spielen",
-                "interrupt": "Bevorzugt vor Spielen"
             },
             "sections": {
                 "appearance": "Darstellung",

@@ -2163,8 +2163,6 @@ class _SettingsVars(TypedDict):
     browser_path: StringVar
     auto_update: IntVar
     fallback_badges_emotes: IntVar
-    creator_badge_watch: IntVar
-    creator_badge_priority: StringVar
     available_drops_check: IntVar
 
 
@@ -2184,13 +2182,6 @@ class SettingsPanel:
             ),
         }
 
-    @cached_property
-    def CREATOR_BADGE_PRIORITIES(self) -> dict[str, str]:
-        return {
-            "fallback": _("gui", "settings", "creator_badge_priorities", "fallback"),
-            "interrupt": _("gui", "settings", "creator_badge_priorities", "interrupt"),
-        }
-
     def __init__(self, manager: GUIManager, master: ttk.Widget):
         self._manager = manager
         self._settings: Settings = manager._twitch.settings
@@ -2198,10 +2189,6 @@ class SettingsPanel:
         if priority_mode not in self.PRIORITY_MODES:
             priority_mode = PriorityMode.PRIORITY_ONLY
             self._settings.priority_mode = priority_mode
-        creator_badge_priority = self._settings.creator_badge_priority
-        if creator_badge_priority not in self.CREATOR_BADGE_PRIORITIES:
-            creator_badge_priority = "fallback"
-            self._settings.creator_badge_priority = creator_badge_priority
         self._vars: _SettingsVars = {
             "autostart": IntVar(master, 0),
             "language": StringVar(master, _.current),
@@ -2214,12 +2201,6 @@ class SettingsPanel:
             "auto_update": IntVar(master, int(self._settings.auto_update)),
             "fallback_badges_emotes": IntVar(
                 master, int(self._settings.fallback_badges_emotes)
-            ),
-            "creator_badge_watch": IntVar(
-                master, int(self._settings.creator_badge_watch)
-            ),
-            "creator_badge_priority": StringVar(
-                master, self.CREATOR_BADGE_PRIORITIES[creator_badge_priority]
             ),
             "available_drops_check": IntVar(
                 master, int(self._settings.available_drops_check)
@@ -2322,23 +2303,6 @@ class SettingsPanel:
             variable=self._vars["fallback_badges_emotes"],
             command=self._toggle_fallback_badges,
         ).grid(column=1, row=2, sticky="w")
-        ttk.Label(
-            mining, text=_("gui", "settings", "general", "creator_badge_watch")
-        ).grid(column=0, row=3, sticky="e")
-        ttk.Checkbutton(
-            mining,
-            variable=self._vars["creator_badge_watch"],
-            command=self._toggle_creator_badge_watch,
-        ).grid(column=1, row=3, sticky="w")
-        ttk.Label(
-            mining, text=_("gui", "settings", "general", "creator_badge_priority")
-        ).grid(column=0, row=4, sticky="e")
-        SelectCombobox(
-            mining,
-            command=self.creator_badge_priority,
-            textvariable=self._vars["creator_badge_priority"],
-            values=list(self.CREATOR_BADGE_PRIORITIES.values()),
-        ).grid(column=1, row=4, sticky="w")
 
         connection = ttk.LabelFrame(
             left_column, padding=(4, 0, 4, 4), text=_("gui", "settings", "sections", "connection")
@@ -2923,21 +2887,6 @@ class SettingsPanel:
         self._settings.fallback_badges_emotes = bool(
             self._vars["fallback_badges_emotes"].get()
         )
-        self._manager._twitch.request_state(State.RULES_UPDATE)
-
-    def _toggle_creator_badge_watch(self) -> None:
-        self._settings.creator_badge_watch = bool(
-            self._vars["creator_badge_watch"].get()
-        )
-        # Enable forces discovery + channel rebuild; disable clears immediately.
-        self._manager._twitch.request_creator_badge_watch_toggle()
-
-    def creator_badge_priority(self, event: tk.Event[ttk.Combobox]) -> None:
-        mode_name: str = self._vars["creator_badge_priority"].get()
-        for value, name in self.CREATOR_BADGE_PRIORITIES.items():
-            if mode_name == name:
-                self._settings.creator_badge_priority = value
-                break
         self._manager._twitch.request_state(State.RULES_UPDATE)
 
     def priority_mode(self, event: tk.Event[ttk.Combobox]) -> None:
@@ -4208,8 +4157,6 @@ if __name__ == "__main__":
                 browser_path="",
                 auto_update=True,
                 fallback_badges_emotes=True,
-                creator_badge_watch=False,
-                creator_badge_priority="fallback",
                 available_drops_check=False,
                 logging_level=LOGGING_LEVELS[0],
                 priority_mode=PriorityMode.PRIORITY_ONLY,

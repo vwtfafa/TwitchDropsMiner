@@ -68,19 +68,6 @@ from constants import (
     ClientType,
     PriorityMode,
     WebsocketTopic,
-    creator_badge_owned_campaigns_query,
-)
-from creator_badges import (
-    CreatorBadgeEvent,
-    active_creator_badge_event_for_channel,
-    apply_creator_badge_progress,
-    event_watch_rewards_complete,
-    has_incomplete_watch_rewards,
-    is_stuck,
-    parse_creator_badge_event,
-    remaining_watch_minutes,
-    select_targets,
-    should_mine_creator_badges,
 )
 from lifecycle import (
     DEFERRED_REQUESTS,
@@ -617,11 +604,6 @@ class Twitch:
         # status hint while idle, so users don't have to guess when new campaigns
         # will appear.
         self._next_reload_at: datetime | None = None
-        # Creator Badge watch-time targets discovered from follows (Task 4+).
-        self._creator_badge_events: list[CreatorBadgeEvent] = []
-        self._creator_badge_events_at: datetime | None = None
-        # channel_id → last time Creator Badge GQL reported progress
-        self._creator_badge_progress_at: dict[int, datetime] = {}
 
     async def get_session(self) -> aiohttp.ClientSession:
         if (session := self._session) is not None:
@@ -898,16 +880,6 @@ class Twitch:
         Higher numbers -> lower priority.
         MAX_INT (a really big number) signifies the lowest possible priority.
         """
-        # Eligible Creator Badge targets outrank game channels whenever mining
-        # them is allowed (interrupt always; fallback only with no finishable game).
-        # Among badge targets, preserve discovery order (ends_at / remaining).
-        if self._creator_badge_can_mine_channel(channel):
-            login = channel.login.casefold()
-            n = len(self._creator_badge_events)
-            for i, event in enumerate(self._creator_badge_events):
-                if event.channel_login.casefold() == login:
-                    return -n + i
-            return -1
         if (
             (game := channel.game) is None  # None when OFFLINE or no game set
             or game not in self.wanted_games  # we don't care about the played game
@@ -1209,23 +1181,19 @@ class Twitch:
                 self.restart_watching()
                 self._advance_state(State.CHANNELS_CLEANUP)
             elif self.state is State.CHANNELS_CLEANUP:
-                badge_ids = self._creator_badge_channel_ids()
                 if not self.wanted_games or full_cleanup:
                     # no games selected or we're doing full cleanup: remove everything
-                    # (Creator Badge targets are re-added in CHANNELS_FETCH)
                     to_remove_channels: list[Channel] = list(channels.values())
                 else:
                     # Incremental cleanup must still drop channels whose game is
                     # no longer wanted, including ACL-based ones; otherwise a
                     # deleted priority game stays in the list until the next full
                     # reload. Offline ACL channels are kept because they can come
-                    # online later and must stay subscribed. Creator Badge targets
-                    # are kept the same way until dropped from `_creator_badge_events`.
+                    # online later and must stay subscribed.
                     to_remove_channels = [
                         channel
                         for channel in channels.values()
-                        if channel.id not in badge_ids
-                        and (
+                        if (
                             (channel.game is not None and channel.game not in self.wanted_games)
                             or (
                                 not channel.acl_based
@@ -1248,7 +1216,7 @@ class Twitch:
                         del channels[channel.id]
                         channel.remove()
                     del to_remove_channels, to_remove_topics
-                if self.wanted_games or self._should_track_creator_badge_channels():
+                if self.wanted_games:
                     self._advance_state(State.CHANNELS_FETCH)
                 else:
                     # with no eligible games, explain exactly why and wait
@@ -1278,27 +1246,12 @@ class Twitch:
                             no_acl.add(campaign.game)
                 # remove all ACL channels that already exist from the other set
                 acl_channels.difference_update(new_channels)
-                # Creator Badge follow targets (may not appear in any campaign ACL)
-                badge_channels: set[Channel] = set()
-                if self._should_track_creator_badge_channels():
-                    existing_ids = {ch.id for ch in new_channels} | {ch.id for ch in acl_channels}
-                    for event in self._creator_badge_events:
-                        if event.channel_id in existing_ids:
-                            continue
-                        badge_channels.add(
-                            Channel(
-                                self,
-                                id=event.channel_id,
-                                login=event.channel_login,
-                            )
-                        )
                 # Revalidate every tracked channel, not just newly discovered ACL
                 # ones. A missed websocket `stream-down` must not leave a channel
                 # ONLINE forever; `bulk_check_online` now applies offline results too.
-                await self.bulk_check_online(new_channels | acl_channels | badge_channels)
+                await self.bulk_check_online(new_channels | acl_channels)
                 # finally, add them as new channels
                 new_channels.update(acl_channels)
-                new_channels.update(badge_channels)
                 # for every campaign without an ACL, for its game, add a list of
                 # live channels with drops enabled. These directory queries are
                 # independent, so run them together instead of waiting one by one.
@@ -1441,7 +1394,9 @@ class Twitch:
                     self._state_change.clear()
                 elif watching_channel is not None and self.can_watch(watching_channel):
                     # otherwise, continue watching what we had before
-                    self.gui.status.update(self._watching_status_text(watching_channel))
+                    self.gui.status.update(
+                        _("status", "watching").format(channel=watching_channel.name)
+                    )
                     # break the state change chain by clearing the flag
                     self._state_change.clear()
                 else:
@@ -1534,8 +1489,6 @@ class Twitch:
                         handled = True
                     else:
                         logger.log(CALL, "No active drop could be determined")
-            # Creator Badge watch-time progress (independent of game-drop GQL)
-            await self._update_creator_badge_progress(channel)
             await self._watch_sleep(interval - min(time() - last_sent, interval))
 
     @task_wrapper(critical=True)
@@ -1584,12 +1537,6 @@ class Twitch:
             return False
         if self._mining_paused or channel.id in self._skipped_channel_ids:
             return False
-        if self._creator_badge_can_mine_channel(channel):
-            return True
-        return self._can_watch_for_game_campaign(channel)
-
-    def _can_watch_for_game_campaign(self, channel: Channel) -> bool:
-        """Game-drop eligibility only (no Creator Badge short-circuit)."""
         for campaign in self.inventory:
             if (
                 campaign.can_earn(channel)  # let the campaign do the "special games" check
@@ -1629,13 +1576,9 @@ class Twitch:
         self.gui.channels.set_watching(channel)
         self.watching_channel.set(channel)
         if update_status:
-            status_text = self._watching_status_text(channel)
+            status_text = _("status", "watching").format(channel=channel.name)
             self.print(status_text)
             self.gui.status.update(status_text)
-        if self._creator_badge_can_mine_channel(channel):
-            self._creator_badge_progress_at.setdefault(
-                channel.id, datetime.now(timezone.utc)
-            )
         # Warn once when mining a campaign that Twitch reports as unlinked —
         # progress/claim for game entitlements may still fail server-side.
         campaign = self.get_active_campaign(channel)
@@ -2284,328 +2227,6 @@ class Twitch:
         # Keep the user-visible schedule in sync with the task's own first period.
         self._next_reload_at = datetime.now(timezone.utc) + timedelta(hours=1)
         self._mnt_task = asyncio.create_task(self._maintenance_task())
-        # Creator Badge discovery shares the inventory/reload cadence, but is
-        # additionally gated to ~45 minutes so follow paging is not hammered.
-        # Failures must not abort inventory: keep prior targets and continue.
-        await self._refresh_creator_badge_targets_safe()
-
-    async def _refresh_creator_badge_targets_safe(self) -> None:
-        try:
-            await self.fetch_creator_badge_targets()
-        except Exception:
-            logger.exception(
-                "Creator Badge discovery failed; keeping prior targets"
-            )
-
-    def has_finishable_wanted_game(self) -> bool:
-        """
-        True when a finishable wanted campaign also has an online channel to watch.
-
-        Spec fallback: Creator Badge mining is blocked only when there is a
-        finishable wanted *game channel* available — not merely a finishable
-        campaign with no live eligible stream.
-        """
-        if not self.wanted_games:
-            return False
-        next_hour = datetime.now(timezone.utc) + timedelta(hours=1)
-        excluded = {name.casefold() for name in self.settings.channel_exclude}
-        for campaign in self.inventory:
-            if not (
-                campaign.game in self.wanted_games
-                and campaign.can_earn_within(next_hour)
-                and campaign.can_finish()
-            ):
-                continue
-            for channel in self.channels.values():
-                if not channel.online:
-                    continue
-                if channel.login.casefold() in excluded:
-                    continue
-                if self._mining_paused or channel.id in self._skipped_channel_ids:
-                    continue
-                if (
-                    campaign.can_earn(channel)
-                    and (
-                        (
-                            channel.game is not None
-                            and channel.drops_enabled
-                            and channel.game in self.wanted_games
-                        )
-                        or campaign.game.is_special()
-                    )
-                ):
-                    return True
-        return False
-
-    def _prune_creator_badge_progress_at(self) -> None:
-        """Keep stuck-guard timestamps only for current discovery targets."""
-        keep = {event.channel_id for event in self._creator_badge_events}
-        stale = [cid for cid in self._creator_badge_progress_at if cid not in keep]
-        for cid in stale:
-            del self._creator_badge_progress_at[cid]
-
-    def _clear_creator_badge_state(self) -> None:
-        """Drop discovery cache and stuck-guard timestamps immediately."""
-        self._creator_badge_events = []
-        self._creator_badge_progress_at.clear()
-        self._creator_badge_events_at = None
-
-    def request_creator_badge_watch_toggle(self) -> None:
-        """
-        Apply a GUI toggle of ``creator_badge_watch``.
-
-        Disable: clear events/progress immediately and rebuild channels.
-        Enable: force discovery, then rebuild channels so targets appear without
-        waiting for the next inventory cycle.
-        """
-        if not self.settings.creator_badge_watch:
-            self._clear_creator_badge_state()
-            self.request_state(State.RULES_UPDATE)
-            return
-        asyncio.create_task(self._enable_creator_badge_watch())
-
-    async def _enable_creator_badge_watch(self) -> None:
-        try:
-            await self.fetch_creator_badge_targets(force=True)
-        except Exception:
-            logger.exception(
-                "Creator Badge discovery failed; keeping prior targets"
-            )
-        self.request_state(State.RULES_UPDATE)
-
-    def _creator_badge_mining_allowed(self) -> bool:
-        return should_mine_creator_badges(
-            enabled=self.settings.creator_badge_watch,
-            priority=self.settings.creator_badge_priority,
-            has_finishable_wanted_game=self.has_finishable_wanted_game(),
-        )
-
-    def _creator_badge_channel_ids(self) -> set[int]:
-        return {event.channel_id for event in self._creator_badge_events}
-
-    def _should_track_creator_badge_channels(self) -> bool:
-        return bool(self.settings.creator_badge_watch and self._creator_badge_events)
-
-    def _creator_badge_event_for(self, channel: Channel) -> CreatorBadgeEvent | None:
-        return active_creator_badge_event_for_channel(
-            self._creator_badge_events, channel_login=channel.login
-        )
-
-    def _creator_badge_can_mine_channel(self, channel: Channel) -> bool:
-        if not self._creator_badge_mining_allowed():
-            return False
-        return self._creator_badge_event_for(channel) is not None
-
-    def _creator_badge_status_minutes(self, event: CreatorBadgeEvent) -> int | str:
-        remaining = remaining_watch_minutes(event)
-        if remaining is not None:
-            return remaining
-        return sum(
-            reward.current_minutes
-            for reward in event.watch_rewards
-            if not reward.is_earned
-        )
-
-    def _watching_status_text(self, channel: Channel) -> str:
-        event = self._creator_badge_event_for(channel)
-        if event is not None and self._creator_badge_mining_allowed():
-            return _("status", "creator_badge_watching").format(
-                channel=channel.name,
-                minutes=self._creator_badge_status_minutes(event),
-            )
-        return _("status", "watching").format(channel=channel.name)
-
-    def _drop_creator_badge_event(self, event: CreatorBadgeEvent) -> None:
-        self._creator_badge_events = [
-            e for e in self._creator_badge_events if e.channel_id != event.channel_id
-        ]
-        self._creator_badge_progress_at.pop(event.channel_id, None)
-
-    def _leave_creator_badge_stuck(self, channel: Channel, event: CreatorBadgeEvent) -> None:
-        self.print(
-            _("status", "creator_badge_watching").format(
-                channel=channel.name,
-                minutes=self._creator_badge_status_minutes(event),
-            )
-            + " — stuck, skipping"
-        )
-        logger.log(CALL, f"Creator Badge stuck on {channel.login}; skipping")
-        self._drop_creator_badge_event(event)
-        self.stop_watching()
-        self.request_state(State.CHANNEL_SWITCH)
-
-    async def _update_creator_badge_progress(self, channel: Channel) -> None:
-        event = self._creator_badge_event_for(channel)
-        if event is None:
-            return
-        if not self._creator_badge_mining_allowed():
-            # Finishable game appeared (fallback). Only abandon the watch if this
-            # channel is not also a valid game-campaign target — dual-purpose
-            # channels must keep mining the game without a thrashy stop/switch.
-            if not self._can_watch_for_game_campaign(channel):
-                self.stop_watching()
-                self.request_state(State.CHANNEL_SWITCH)
-            else:
-                # Drop stale creator_badge_watching status while keeping the stream.
-                self.gui.status.update(self._watching_status_text(channel))
-            return
-        try:
-            response = await self.gql_request(
-                creator_badge_owned_campaigns_query([str(channel.id)])
-            )
-        except Exception:
-            logger.exception(
-                "Creator Badge progress query failed for %s", channel.login
-            )
-            now = datetime.now(timezone.utc)
-            last_at = self._creator_badge_progress_at.get(channel.id, now)
-            if is_stuck(last_progress_at=last_at, now=now):
-                self._leave_creator_badge_stuck(channel, event)
-            return
-        progressed = apply_creator_badge_progress(event, response)
-        now = datetime.now(timezone.utc)
-        if progressed:
-            self._creator_badge_progress_at[channel.id] = now
-            self.gui.status.update(self._watching_status_text(channel))
-        if event_watch_rewards_complete(event) or not has_incomplete_watch_rewards(event):
-            logger.log(
-                CALL,
-                f"Creator Badge complete on {channel.login}; leaving channel",
-            )
-            self._drop_creator_badge_event(event)
-            self.stop_watching()
-            self.request_state(State.CHANNEL_SWITCH)
-            return
-        last_at = self._creator_badge_progress_at.get(channel.id, now)
-        if is_stuck(last_progress_at=last_at, now=now):
-            self._leave_creator_badge_stuck(channel, event)
-
-    async def fetch_creator_badge_targets(self, *, force: bool = False) -> list[CreatorBadgeEvent]:
-        """Page follows, batch Creator Badge GQL, store incomplete watch targets."""
-        if not self.settings.creator_badge_watch:
-            self._clear_creator_badge_state()
-            return self._creator_badge_events
-
-        now = datetime.now(timezone.utc)
-        if (
-            not force
-            and self._creator_badge_events_at is not None
-            and now - self._creator_badge_events_at < timedelta(minutes=45)
-        ):
-            return self._creator_badge_events
-
-        follows = await self._page_channel_follows(limit=500)
-        if not follows:
-            self._creator_badge_events = []
-            self._prune_creator_badge_progress_at()
-            self._creator_badge_events_at = now
-            return self._creator_badge_events
-
-        login_by_id = {cid: login for cid, login in follows}
-        # SideNav presence filter first, then full progress query for hits.
-        candidate_ids = await self._creator_badge_sidenav_hits(list(login_by_id))
-        if not candidate_ids:
-            self._creator_badge_events = []
-            self._prune_creator_badge_progress_at()
-            self._creator_badge_events_at = now
-            return self._creator_badge_events
-
-        events: list[CreatorBadgeEvent] = []
-        for id_chunk in chunk(candidate_ids, 20):
-            response = await self.gql_request(
-                creator_badge_owned_campaigns_query([str(cid) for cid in id_chunk])
-            )
-            owned = (response.get("data") or {}).get("channelOwnedDropCampaigns") or []
-            for entry in owned:
-                channel = entry.get("channel") or {}
-                raw_id = channel.get("id")
-                if raw_id is None:
-                    continue
-                channel_id = int(raw_id)
-                login = login_by_id.get(channel_id)
-                if not login:
-                    continue
-                # Re-wrap a single-channel payload so parse_creator_badge_event
-                # can reuse the same fixture/document shape.
-                single = {"data": {"channelOwnedDropCampaigns": [entry]}}
-                event = parse_creator_badge_event(
-                    single, channel_id=channel_id, channel_login=login
-                )
-                if event is not None:
-                    events.append(event)
-
-        selected = select_targets(
-            events,
-            exclude=self.settings.channel_exclude,
-            enabled=True,
-            priority=self.settings.creator_badge_priority,
-            has_finishable=False,
-        )
-        self._creator_badge_events = selected
-        self._prune_creator_badge_progress_at()
-        self._creator_badge_events_at = now
-        logger.log(
-            CALL,
-            f"Creator Badge targets: {len(selected)} "
-            f"(from {len(candidate_ids)} sidenav hits / {len(follows)} follows)",
-        )
-        return self._creator_badge_events
-
-    async def _page_channel_follows(self, *, limit: int = 500) -> list[tuple[int, str]]:
-        """Paginate ChannelFollows up to ``limit`` (id, login) pairs."""
-        follows: list[tuple[int, str]] = []
-        cursor: str | None = None
-        page_size = min(100, limit)
-        while len(follows) < limit:
-            variables: JsonType = {"limit": page_size, "order": "DESC"}
-            if cursor:
-                variables["cursor"] = cursor
-            response = await self.gql_request(
-                GQL_QUERIES["ChannelFollows"].with_variables(variables)
-            )
-            conn = ((response.get("data") or {}).get("user") or {}).get("follows") or {}
-            edges = conn.get("edges") or []
-            if not edges:
-                break
-            for edge in edges:
-                node = edge.get("node") or {}
-                raw_id = node.get("id")
-                login = node.get("login")
-                if raw_id is None or not login:
-                    continue
-                follows.append((int(raw_id), str(login)))
-                if len(follows) >= limit:
-                    break
-            page_info = conn.get("pageInfo") or {}
-            if not page_info.get("hasNextPage"):
-                break
-            # Prefer edge cursor (Channel Points miner pattern); fall back to pageInfo.
-            last_cursor = edges[-1].get("cursor") or page_info.get("endCursor")
-            if not last_cursor or last_cursor == cursor:
-                break
-            cursor = last_cursor
-        return follows[:limit]
-
-    async def _creator_badge_sidenav_hits(self, channel_ids: list[int]) -> list[int]:
-        """Return channel IDs that SideNav reports as having Creator Badge campaigns."""
-        hits: list[int] = []
-        for id_chunk in chunk(channel_ids, 30):
-            response = await self.gql_request(
-                GQL_QUERIES["SideNavCreatorBadgeDrops"].with_variables(
-                    {"channelIDs": [str(cid) for cid in id_chunk]}
-                )
-            )
-            owned = (response.get("data") or {}).get("channelOwnedDropCampaigns") or []
-            for entry in owned:
-                campaigns = entry.get("campaigns") or []
-                if not campaigns:
-                    continue
-                channel = entry.get("channel") or {}
-                raw_id = channel.get("id")
-                if raw_id is None:
-                    continue
-                hits.append(int(raw_id))
-        return hits
 
     def get_active_campaign(self, channel: Channel | None = None) -> DropsCampaign | None:
         if not self.wanted_games:
