@@ -2929,7 +2929,8 @@ class SettingsPanel:
         self._settings.creator_badge_watch = bool(
             self._vars["creator_badge_watch"].get()
         )
-        self._manager._twitch.request_state(State.RULES_UPDATE)
+        # Enable forces discovery + channel rebuild; disable clears immediately.
+        self._manager._twitch.request_creator_badge_watch_toggle()
 
     def creator_badge_priority(self, event: tk.Event[ttk.Combobox]) -> None:
         mode_name: str = self._vars["creator_badge_priority"].get()

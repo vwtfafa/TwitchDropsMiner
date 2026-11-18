@@ -2298,18 +2298,80 @@ class Twitch:
             )
 
     def has_finishable_wanted_game(self) -> bool:
-        """True if any inventory campaign for a wanted game can finish soon."""
+        """
+        True when a finishable wanted campaign also has an online channel to watch.
+
+        Spec fallback: Creator Badge mining is blocked only when there is a
+        finishable wanted *game channel* available — not merely a finishable
+        campaign with no live eligible stream.
+        """
         if not self.wanted_games:
             return False
         next_hour = datetime.now(timezone.utc) + timedelta(hours=1)
+        excluded = {name.casefold() for name in self.settings.channel_exclude}
         for campaign in self.inventory:
-            if (
+            if not (
                 campaign.game in self.wanted_games
                 and campaign.can_earn_within(next_hour)
                 and campaign.can_finish()
             ):
-                return True
+                continue
+            for channel in self.channels.values():
+                if not channel.online:
+                    continue
+                if channel.login.casefold() in excluded:
+                    continue
+                if self._mining_paused or channel.id in self._skipped_channel_ids:
+                    continue
+                if (
+                    campaign.can_earn(channel)
+                    and (
+                        (
+                            channel.game is not None
+                            and channel.drops_enabled
+                            and channel.game in self.wanted_games
+                        )
+                        or campaign.game.is_special()
+                    )
+                ):
+                    return True
         return False
+
+    def _prune_creator_badge_progress_at(self) -> None:
+        """Keep stuck-guard timestamps only for current discovery targets."""
+        keep = {event.channel_id for event in self._creator_badge_events}
+        stale = [cid for cid in self._creator_badge_progress_at if cid not in keep]
+        for cid in stale:
+            del self._creator_badge_progress_at[cid]
+
+    def _clear_creator_badge_state(self) -> None:
+        """Drop discovery cache and stuck-guard timestamps immediately."""
+        self._creator_badge_events = []
+        self._creator_badge_progress_at.clear()
+        self._creator_badge_events_at = None
+
+    def request_creator_badge_watch_toggle(self) -> None:
+        """
+        Apply a GUI toggle of ``creator_badge_watch``.
+
+        Disable: clear events/progress immediately and rebuild channels.
+        Enable: force discovery, then rebuild channels so targets appear without
+        waiting for the next inventory cycle.
+        """
+        if not self.settings.creator_badge_watch:
+            self._clear_creator_badge_state()
+            self.request_state(State.RULES_UPDATE)
+            return
+        asyncio.create_task(self._enable_creator_badge_watch())
+
+    async def _enable_creator_badge_watch(self) -> None:
+        try:
+            await self.fetch_creator_badge_targets(force=True)
+        except Exception:
+            logger.exception(
+                "Creator Badge discovery failed; keeping prior targets"
+            )
+        self.request_state(State.RULES_UPDATE)
 
     def _creator_badge_mining_allowed(self) -> bool:
         return should_mine_creator_badges(
@@ -2421,10 +2483,7 @@ class Twitch:
     async def fetch_creator_badge_targets(self, *, force: bool = False) -> list[CreatorBadgeEvent]:
         """Page follows, batch Creator Badge GQL, store incomplete watch targets."""
         if not self.settings.creator_badge_watch:
-            self._creator_badge_events = []
-            self._creator_badge_progress_at.clear()
-            # Clear the gate so re-enable does not return [] under a stale timestamp.
-            self._creator_badge_events_at = None
+            self._clear_creator_badge_state()
             return self._creator_badge_events
 
         now = datetime.now(timezone.utc)
@@ -2438,6 +2497,7 @@ class Twitch:
         follows = await self._page_channel_follows(limit=500)
         if not follows:
             self._creator_badge_events = []
+            self._prune_creator_badge_progress_at()
             self._creator_badge_events_at = now
             return self._creator_badge_events
 
@@ -2446,6 +2506,7 @@ class Twitch:
         candidate_ids = await self._creator_badge_sidenav_hits(list(login_by_id))
         if not candidate_ids:
             self._creator_badge_events = []
+            self._prune_creator_badge_progress_at()
             self._creator_badge_events_at = now
             return self._creator_badge_events
 
@@ -2481,6 +2542,7 @@ class Twitch:
             has_finishable=False,
         )
         self._creator_badge_events = selected
+        self._prune_creator_badge_progress_at()
         self._creator_badge_events_at = now
         logger.log(
             CALL,

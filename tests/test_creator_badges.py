@@ -582,3 +582,167 @@ def test_get_priority_orders_badge_targets_by_discovery_list():
     ch_late = SimpleNamespace(login="late", game=None)
     assert twitch.get_priority(ch_early) < twitch.get_priority(ch_late)  # type: ignore[arg-type]
     assert twitch.get_priority(ch_early) < 0  # type: ignore[arg-type]
+
+
+def test_fetch_prunes_stale_creator_badge_progress_at():
+    """Refresh keeps stuck-guard stamps only for current selected channel_ids."""
+    import asyncio
+    from types import SimpleNamespace
+
+    twitch = _twitch_for_badge_progress()
+    now = datetime.now(timezone.utc)
+    twitch._creator_badge_progress_at = {
+        1: now,
+        99: now - timedelta(minutes=5),
+    }
+    kept = CreatorBadgeEvent(
+        1,
+        "keep",
+        datetime(2026, 12, 1, tzinfo=timezone.utc),
+        [CreatorBadgeWatchReward("1", "a", None, 0, False)],
+    )
+
+    async def fake_follows(*, limit: int = 500):
+        return [(1, "keep")]
+
+    async def fake_sidenav(ids):
+        return list(ids)
+
+    async def fake_gql(_op):
+        return {
+            "data": {
+                "channelOwnedDropCampaigns": [
+                    {
+                        "channel": {"id": "1"},
+                        "campaigns": [
+                            {
+                                "brandName": "CREATOR_LED_BADGE_CAMPAIGN",
+                                "status": "ACTIVE",
+                                "endAt": "2026-12-01T00:00:00Z",
+                                "rewardGroups": [
+                                    {
+                                        "id": "1",
+                                        "name": "a",
+                                        "progressCriteria": {"requirementType": "WATCH"},
+                                        "self": {
+                                            "status": "IN_PROGRESS",
+                                            "currentMinutesWatched": 0,
+                                        },
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+
+    twitch._page_channel_follows = fake_follows  # type: ignore[method-assign]
+    twitch._creator_badge_sidenav_hits = fake_sidenav  # type: ignore[method-assign]
+    twitch.gql_request = fake_gql  # type: ignore[method-assign]
+
+    result = asyncio.run(twitch.fetch_creator_badge_targets(force=True))
+    assert [e.channel_id for e in result] == [1]
+    assert set(twitch._creator_badge_progress_at) == {1}
+    assert twitch._creator_badge_events[0].channel_login == kept.channel_login
+
+
+def test_fetch_clears_progress_at_when_no_targets():
+    import asyncio
+
+    twitch = _twitch_for_badge_progress()
+    twitch._creator_badge_progress_at[5] = datetime.now(timezone.utc)
+
+    async def no_follows(*, limit: int = 500):
+        return []
+
+    twitch._page_channel_follows = no_follows  # type: ignore[method-assign]
+    result = asyncio.run(twitch.fetch_creator_badge_targets(force=True))
+    assert result == []
+    assert twitch._creator_badge_progress_at == {}
+
+
+def test_toggle_disable_clears_events_immediately():
+    from constants import State
+
+    twitch = _twitch_for_badge_progress()
+    twitch.settings.creator_badge_watch = False
+    twitch._creator_badge_events = [
+        CreatorBadgeEvent(
+            1,
+            "x",
+            datetime(2026, 12, 1, tzinfo=timezone.utc),
+            [CreatorBadgeWatchReward("1", "a", None, 0, False)],
+        )
+    ]
+    twitch._creator_badge_progress_at[1] = datetime.now(timezone.utc)
+    twitch._creator_badge_events_at = datetime.now(timezone.utc)
+
+    requested: list[object] = []
+    twitch.request_state = lambda state, *, reason="": requested.append(state)  # type: ignore[method-assign]
+
+    twitch.request_creator_badge_watch_toggle()
+    assert twitch._creator_badge_events == []
+    assert twitch._creator_badge_progress_at == {}
+    assert twitch._creator_badge_events_at is None
+    assert requested == [State.RULES_UPDATE]
+
+
+def test_toggle_enable_forces_discovery_then_rebuild():
+    import asyncio
+    from constants import State
+
+    twitch = _twitch_for_badge_progress()
+    twitch.settings.creator_badge_watch = True
+    calls: list[dict] = []
+    requested: list[object] = []
+
+    async def fake_fetch(*, force: bool = False):
+        calls.append({"force": force})
+        return []
+
+    twitch.fetch_creator_badge_targets = fake_fetch  # type: ignore[method-assign]
+    twitch.request_state = lambda state, *, reason="": requested.append(state)  # type: ignore[method-assign]
+
+    async def run_toggle():
+        task = asyncio.create_task(twitch._enable_creator_badge_watch())
+        await task
+
+    asyncio.run(run_toggle())
+    assert calls == [{"force": True}]
+    assert requested == [State.RULES_UPDATE]
+
+
+def test_has_finishable_wanted_game_requires_online_eligible_channel():
+    from types import SimpleNamespace
+
+    twitch = _twitch_for_badge_progress()
+    game = SimpleNamespace(name="Wanted", is_special=lambda: False)
+    twitch.wanted_games = [game]
+
+    campaign = SimpleNamespace(
+        game=game,
+        can_earn_within=lambda _stamp: True,
+        can_finish=lambda: True,
+        can_earn=lambda channel: channel.id == 10,
+    )
+    twitch.inventory = [campaign]  # type: ignore[assignment]
+
+    # Finishable campaign exists, but channel is offline → do not block badges.
+    offline = SimpleNamespace(
+        id=10,
+        login="streamer",
+        online=False,
+        game=game,
+        drops_enabled=True,
+    )
+    twitch.channels[10] = offline  # type: ignore[assignment]
+    assert twitch.has_finishable_wanted_game() is False
+
+    # Online eligible channel → block fallback Creator Badge mining.
+    offline.online = True
+    assert twitch.has_finishable_wanted_game() is True
+
+    # Excluded online channel does not count.
+    twitch.settings.channel_exclude = {"streamer"}
+    assert twitch.has_finishable_wanted_game() is False
